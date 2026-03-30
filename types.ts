@@ -1,0 +1,52 @@
+
+export enum TaskStatus {
+  IDLE = 'IDLE',
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
+  PAUSED = 'PAUSED'
+}
+
+export type AspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9";
+export type ImageSize = "1K" | "2K" | "4K";
+export type AntiAILevel = "off" | "low" | "medium" | "high";
+
+export interface ReferenceImageItem {
+  id: string;
+  name: string;
+  imageData: string;
+}
+
+export interface GenerationTask {
+  id: string;
+  prompt: string;
+  referenceMentions?: string[];
+  referenceImage?: string; // Base64 string
+  referenceImages?: ReferenceImageItem[];
+  status: TaskStatus;
+  progress: number;
+  resultUrl?: string;
+  outputWidth?: number;
+  outputHeight?: number;
+  error?: string;
+  selected?: boolean; // For batch operations
+  config: {
+    aspectRatio: AspectRatio;
+    imageSize: ImageSize;
+  };
+  createdAt: number;
+}
+
+export interface AppSettings {
+  yunwuImageModel: string;
+  yunwuTextModel: string;
+  defaultAspectRatio: AspectRatio;
+  defaultImageSize: ImageSize;
+  globalReferenceImage?: string;
+  referenceLibrary: ReferenceImageItem[];
+  applyGlobalRefOnImport: boolean;
+  concurrency: number;
+  antiAILevel: AntiAILevel;
+  forceRealisticPrompt: boolean;
+}
