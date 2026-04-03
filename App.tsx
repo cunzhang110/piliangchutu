@@ -755,7 +755,7 @@ const App: React.FC = () => {
           <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-2xl flex items-center justify-center text-white text-xl shadow-lg">
             <i className="fa-solid fa-palette"></i>
           </div>
-          <h1 className="text-xl font-black tracking-tight">生图大师 <span className="text-blue-600 text-[10px] bg-blue-50 px-2 py-0.5 rounded-full ml-2 border border-blue-100 font-bold">V3.5 PRO</span></h1>
+          <h1 className="text-xl font-black tracking-tight">生图大师 <span className="text-blue-600 text-[10px] bg-blue-50 px-2 py-0.5 rounded-full ml-2 border border-blue-100 font-bold">V3.0</span></h1>
           <button onClick={() => setShowReferenceLibrary(true)} className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[11px] font-black flex items-center gap-2 hover:bg-slate-50">
             <i className="fa-solid fa-images text-blue-600"></i> 参考图库
             <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">{settings.referenceLibrary.length}</span>

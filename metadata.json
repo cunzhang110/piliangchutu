@@ -1,5 +1,5 @@
 {
-  "name": "2.0版本去ai话: 批量生图大师 (Gemini 3.1 Flash Image)",
+  "name": "3.0版本: 批量生图大师 (Gemini 3.1 Flash Image)",
   "description": "基于 Gemini-3.1-Flash-Image-Preview 的专业级批量生图工具，支持提示词导入、参考图生图、任务管理及高质量 4K 输出。",
   "requestFramePermissions": [
     "camera"
