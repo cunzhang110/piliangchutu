@@ -254,6 +254,11 @@ const App: React.FC = () => {
   const [externalImageJobs, setExternalImageJobs] = useState<ExternalImageJob[]>([]);
   const [externalAntiAILevel, setExternalAntiAILevel] = useState<AntiAILevel>('medium');
   const [isExternalImageProcessing, setIsExternalImageProcessing] = useState<boolean>(false);
+  const [batchDraftConfig, setBatchDraftConfig] = useState<{ aspectRatio: AspectRatio | ''; imageSize: ImageSize | '' }>({
+    aspectRatio: '',
+    imageSize: ''
+  });
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState<boolean>(false);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'error' | 'success' } | null>(null);
   
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -639,14 +644,40 @@ const App: React.FC = () => {
     setTasks(prev => [newTask, ...prev]);
   };
 
-  const updateBatchConfig = (config: Partial<GenerationTask['config']>) => {
-    setTasks(prev => prev.map(t => {
-      if (t.selected) {
-        const newConfig = { ...t.config, ...config };
-        return { ...t, config: newConfig as any };
-      }
-      return t;
-    }));
+  const applyBatchConfig = () => {
+    const selectedTaskCount = tasks.filter(task => task.selected).length;
+    if (selectedTaskCount === 0) {
+      showToast('请先选择要批量修改的任务', 'error');
+      return;
+    }
+
+    const configPatch: Partial<GenerationTask['config']> = {};
+    if (batchDraftConfig.aspectRatio) {
+      configPatch.aspectRatio = batchDraftConfig.aspectRatio;
+    }
+    if (batchDraftConfig.imageSize) {
+      configPatch.imageSize = batchDraftConfig.imageSize;
+    }
+
+    if (Object.keys(configPatch).length === 0) {
+      showToast('请先选择要应用的比例或分辨率', 'error');
+      return;
+    }
+
+    setTasks(prev => prev.map(task => (
+      task.selected
+        ? { ...task, config: { ...task.config, ...configPatch } }
+        : task
+    )));
+    setBatchDraftConfig({ aspectRatio: '', imageSize: '' });
+    showToast(`已把设置应用到 ${selectedTaskCount} 个任务`, 'success');
+  };
+
+  const handleBatchDelete = () => {
+    const deletedCount = tasks.filter(task => task.selected).length;
+    setTasks(prev => prev.filter(task => !task.selected));
+    setShowBatchDeleteConfirm(false);
+    showToast(`已删除 ${deletedCount} 个任务`, 'success');
   };
 
   const handleBatchImport = () => {
@@ -1090,10 +1121,6 @@ const App: React.FC = () => {
           <span className="text-[9px] font-bold text-slate-500">{defaultResolutionSummary}</span>
         </div>
 
-        <div className="md:col-span-3 flex justify-end gap-2">
-          <button onClick={() => csvInputRef.current?.click()} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 hover:bg-slate-50 transition-all"><i className="fa-solid fa-file-excel text-green-600"></i> 导入文件</button>
-          <button onClick={() => addTask()} className="bg-blue-50 text-blue-700 px-4 py-2.5 rounded-xl text-xs font-black hover:bg-blue-100 active:scale-95"><i className="fa-solid fa-plus-circle"></i> 新增任务</button>
-        </div>
       </div>
 
       {/* Anti-AI Settings Panel */}
@@ -1153,20 +1180,107 @@ const App: React.FC = () => {
               <i className="fa-solid fa-image-landscape text-4xl text-slate-200"></i>
             </div>
             <p className="text-sm font-black text-slate-300 uppercase tracking-widest">请导入提示词文件或手动添加任务</p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <button onClick={() => addTask()} className="rounded-xl bg-blue-600 px-5 py-3 text-xs font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-95">
+                <i className="fa-solid fa-plus-circle mr-2"></i>新增空任务
+              </button>
+              <button onClick={() => csvInputRef.current?.click()} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-black text-slate-700 hover:bg-slate-50">
+                <i className="fa-solid fa-file-excel text-green-600 mr-2"></i>导入文件
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            <div className="mb-6 flex items-center justify-between bg-white/50 backdrop-blur p-3 rounded-2xl border border-slate-200/60 sticky top-0 z-30 shadow-sm">
-              <div className="flex items-center gap-2">
-                <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: true })))} className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black text-blue-600 hover:bg-blue-50 transition-all">全选</button>
-                <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: false })))} className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-[10px] font-black text-slate-500 hover:bg-slate-50">清空选择</button>
-                <div className="h-4 w-px bg-slate-200 mx-2"></div>
-                <button onClick={() => setTasks(prev => prev.map(t => t.status === TaskStatus.FAILED ? { ...t, selected: true } : t))} className="px-4 py-2 bg-red-50 text-red-700 rounded-xl text-[10px] font-black hover:bg-red-100 transition-all">选中失败项</button>
+            <div className="sticky top-0 z-30 mb-6 overflow-hidden rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm backdrop-blur">
+              <div className="flex flex-wrap items-center justify-between gap-3 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={() => addTask()} className="rounded-xl bg-blue-600 px-4 py-2 text-[11px] font-black text-white shadow-lg shadow-blue-500/15 hover:bg-blue-700 active:scale-95">
+                    <i className="fa-solid fa-plus-circle mr-2"></i>新增空任务
+                  </button>
+                  <button onClick={() => csvInputRef.current?.click()} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50">
+                    <i className="fa-solid fa-file-excel text-green-600 mr-2"></i>导入文件
+                  </button>
+                  <div className="mx-2 hidden h-5 w-px bg-slate-200 sm:block"></div>
+                  <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: true })))} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[10px] font-black text-blue-600 transition-all hover:bg-blue-50">全选</button>
+                  <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: false })))} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[10px] font-black text-slate-500 hover:bg-slate-50">清空选择</button>
+                  <button onClick={() => setTasks(prev => prev.map(t => t.status === TaskStatus.FAILED ? { ...t, selected: true } : t))} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-black text-red-700 transition-all hover:bg-red-100">选中失败项</button>
+                </div>
+                <div className="flex items-center gap-3 pr-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">任务总数: <span className="text-slate-800">{tasks.length}</span></span>
+                  <span className="border-l border-slate-200 pl-3 text-[10px] font-black uppercase tracking-widest text-slate-400">已选: <span className="text-blue-600">{selectedCount}</span></span>
+                </div>
               </div>
-              <div className="flex items-center gap-3 pr-4">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">任务总数: <span className="text-slate-800">{tasks.length}</span></span>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-l border-slate-200 pl-3">已选: <span className="text-blue-600">{selectedCount}</span></span>
-              </div>
+
+              {selectedCount > 0 && (
+                <div className="border-t border-slate-200 bg-slate-50/90 px-3 py-3">
+                  <div className="flex flex-wrap items-end gap-4">
+                    <div className="flex min-w-[220px] flex-col gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">批量比例</span>
+                      <select
+                        value={batchDraftConfig.aspectRatio}
+                        onChange={(e) => setBatchDraftConfig(prev => ({ ...prev, aspectRatio: e.target.value as AspectRatio }))}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 outline-none focus:border-blue-400"
+                      >
+                        <option value="">不修改比例</option>
+                        {supportedAspectRatios.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </div>
+                    <div className="flex min-w-[220px] flex-col gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">批量分辨率</span>
+                      <select
+                        value={batchDraftConfig.imageSize}
+                        onChange={(e) => setBatchDraftConfig(prev => ({ ...prev, imageSize: e.target.value as ImageSize }))}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 outline-none focus:border-blue-400"
+                      >
+                        <option value="">不修改分辨率</option>
+                        {supportedImageSizes.map(sz => (
+                          <option key={sz} value={sz}>
+                            {supportsExplicitImageSize ? sz : '原生'} · {getYunwuResolutionLabel(activeImageModel, settings.defaultAspectRatio, sz) || '以实际输出尺寸为准'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      onClick={applyBatchConfig}
+                      className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-black text-white shadow-lg shadow-blue-500/15 hover:bg-blue-700 active:scale-95"
+                    >
+                      应用到已选 {selectedCount} 个任务
+                    </button>
+
+                    <div className="h-8 w-px bg-slate-200"></div>
+
+                    <div className="flex min-w-[260px] flex-col gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">批量参考图</span>
+                      <div className="flex gap-2">
+                        <select
+                          value={batchReferenceId}
+                          onChange={(e) => setBatchReferenceId(e.target.value)}
+                          title={selectedBatchReference ? formatReferenceMention(selectedBatchReference.name) : '选择参考图库图片'}
+                          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 outline-none focus:border-blue-400"
+                        >
+                          <option value="">选择参考图库图片</option>
+                          {settings.referenceLibrary.map(reference => (
+                            <option key={reference.id} value={reference.id}>
+                              {formatReferenceMention(reference.name)}
+                            </option>
+                          ))}
+                        </select>
+                        <button onClick={() => handleBatchReferenceApply('append')} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black text-blue-700 hover:bg-blue-100">插入</button>
+                        <button onClick={() => handleBatchReferenceApply('replace')} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-700 hover:bg-amber-100">替换</button>
+                      </div>
+                    </div>
+
+                    <div className="ml-auto flex items-end gap-2">
+                      <button onClick={runSelected} className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-black text-white shadow-lg shadow-blue-500/15 hover:bg-blue-700 active:scale-95">
+                        <i className="fa-solid fa-play mr-2"></i>生成选中
+                      </button>
+                      <button onClick={() => setShowBatchDeleteConfirm(true)} className="rounded-xl border border-red-200 bg-white px-4 py-2.5 text-xs font-black text-red-600 hover:bg-red-50">
+                        删除选中
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-6">
@@ -1199,99 +1313,34 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Batch Floating Bar */}
-      {selectedCount > 0 && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 w-full max-w-6xl px-6 animate-in slide-in-from-bottom-10">
-          <div className="bg-slate-900/95 text-white px-8 py-5 rounded-[2.5rem] flex items-center gap-6 shadow-2xl backdrop-blur-2xl border border-white/5 overflow-x-auto no-scrollbar">
-             <div className="flex items-center gap-4 pr-6 border-r border-white/10 shrink-0">
-                <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center font-black text-lg shadow-lg">{selectedCount}</div>
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">批量编辑</span>
-                  <span className="text-[9px] text-slate-500 font-bold">已选任务</span>
-                </div>
-             </div>
-             
-             <div className="flex-1 flex flex-wrap gap-6 items-start min-w-0">
-                <div className="flex flex-col gap-2">
-                  <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">比例</span>
-                  <div className="flex flex-wrap gap-1">
-                    {supportedAspectRatios.map(r => (
-                      <button key={r} onClick={() => updateBatchConfig({ aspectRatio: r })} className="text-[10px] font-black px-3 py-1.5 rounded-lg bg-white/5 hover:bg-blue-600 transition-all border border-white/10">{r}</button>
-                    ))}
-                  </div>
-                  <span className="text-[8px] font-bold text-slate-400">仅支持固定比例，不再支持自定义输入</span>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">
-                    {supportsExplicitImageSize ? '云雾分辨率' : '云雾原生分辨率'}
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {supportedImageSizes.map(sz => (
-                      <button
-                        key={sz}
-                        onClick={() => updateBatchConfig({ imageSize: sz as ImageSize })}
-                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-left transition-all hover:bg-blue-600"
-                      >
-                        <div className="text-[10px] font-black">{supportsExplicitImageSize ? sz : '原生'}</div>
-                        <div className="text-[8px] font-bold text-slate-300">
-                          {getYunwuResolutionLabel(activeImageModel, settings.defaultAspectRatio, sz) || '以实际输出尺寸为准'}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  <span className="text-[8px] font-bold text-slate-400">{defaultResolutionSummary}</span>
-                </div>
-
-                <div className="flex flex-col gap-2 min-w-0 max-w-[320px]">
-                  <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">参考图</span>
-                  <div className="flex gap-2 items-center min-w-0">
-                    <select
-                      value={batchReferenceId}
-                      onChange={(e) => setBatchReferenceId(e.target.value)}
-                      title={selectedBatchReference ? formatReferenceMention(selectedBatchReference.name) : '选择参考图库图片'}
-                      className="w-[220px] max-w-[220px] rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 pr-8 text-[10px] font-black text-white outline-none overflow-hidden text-ellipsis whitespace-nowrap"
-                    >
-                      <option value="" className="text-slate-900">选择参考图库图片</option>
-                      {settings.referenceLibrary.map(reference => (
-                        <option key={reference.id} value={reference.id} className="text-slate-900">
-                          {formatReferenceMention(reference.name)}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => handleBatchReferenceApply('append')}
-                      className="text-[10px] font-black px-4 py-1.5 rounded-lg bg-white/5 hover:bg-blue-600 transition-all border border-white/10"
-                    >
-                      插入
-                    </button>
-                    <button
-                      onClick={() => handleBatchReferenceApply('replace')}
-                      className="text-[10px] font-black px-4 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500 transition-all border border-amber-400/20"
-                    >
-                      替换
-                    </button>
-                  </div>
-                  {selectedBatchReference && (
-                    <div
-                      className="max-w-[220px] truncate rounded-lg bg-white/5 px-2 py-1 text-[9px] font-bold text-slate-300"
-                      title={formatReferenceMention(selectedBatchReference.name)}
-                    >
-                      当前: {formatReferenceMention(selectedBatchReference.name)}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col gap-2 ml-auto">
-                  <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">操作</span>
-                  <div className="flex gap-2">
-                    <button onClick={runSelected} className="text-[10px] font-black px-6 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-all shadow-lg active:scale-95"><i className="fa-solid fa-play mr-2"></i>生成已选</button>
-                    <button onClick={() => setTasks(prev => prev.filter(t => !t.selected))} className="text-[10px] font-black px-6 py-1.5 rounded-xl bg-red-600/80 hover:bg-red-600 transition-all border border-red-500/20"><i className="fa-solid fa-trash mr-2"></i>批量删除</button>
-                  </div>
-                </div>
-             </div>
-
-             <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: false })))} className="text-slate-500 hover:text-white transition-all transform hover:scale-110 shrink-0"><i className="fa-solid fa-circle-xmark text-2xl"></i></button>
+      {showBatchDeleteConfirm && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/50 p-6 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-3xl border border-slate-100 bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+                <i className="fa-solid fa-triangle-exclamation"></i>
+              </div>
+              <div>
+                <h2 className="text-base font-black text-slate-900">确认删除已选任务？</h2>
+                <p className="mt-2 text-sm font-medium leading-relaxed text-slate-500">
+                  将删除已选 {selectedCount} 个任务，此操作不会影响已经导出的图片，但任务卡会从列表中移除。
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setShowBatchDeleteConfirm(false)}
+                className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-xs font-black text-slate-600 transition-all hover:bg-slate-200"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchDelete}
+                className="flex-1 rounded-2xl bg-red-600 px-4 py-3 text-xs font-black text-white shadow-lg shadow-red-500/20 transition-all hover:bg-red-700 active:scale-95"
+              >
+                确认删除
+              </button>
+            </div>
           </div>
         </div>
       )}
