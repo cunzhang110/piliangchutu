@@ -8,9 +8,10 @@ export enum TaskStatus {
   PAUSED = 'PAUSED'
 }
 
-export type AspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9";
+export type AspectRatio = string;
 export type ImageSize = "1K" | "2K" | "4K";
 export type AntiAILevel = "off" | "low" | "medium" | "high";
+export type ServiceProvider = "yunwu" | "apimart";
 
 export interface ReferenceImageItem {
   id: string;
@@ -30,6 +31,7 @@ export interface GenerationTask {
   outputWidth?: number;
   outputHeight?: number;
   error?: string;
+  statusMessage?: string;
   selected?: boolean; // For batch operations
   config: {
     aspectRatio: AspectRatio;
@@ -39,8 +41,11 @@ export interface GenerationTask {
 }
 
 export interface AppSettings {
+  activeProvider: ServiceProvider;
   yunwuImageModel: string;
   yunwuTextModel: string;
+  apimartImageModel: string;
+  apimartTextModel: string;
   defaultAspectRatio: AspectRatio;
   defaultImageSize: ImageSize;
   globalReferenceImage?: string;

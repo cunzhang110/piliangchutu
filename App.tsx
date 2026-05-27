@@ -1,17 +1,33 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { GenerationTask, TaskStatus, AspectRatio, ImageSize, AppSettings, AntiAILevel, ReferenceImageItem } from './types';
+import { GenerationTask, TaskStatus, AspectRatio, ImageSize, AppSettings, AntiAILevel, ReferenceImageItem, ServiceProvider } from './types';
 import { TaskCard } from './components/TaskCard';
-import { generateImage, getDefaultImageModel, getDefaultTextModel, getProviderLabel, hasConfiguredApiKey, preparePromptForImage } from './services/geminiService';
+import { generateImage, getDefaultTextModel, getProviderLabel, hasConfiguredApiKey, preparePromptForImage } from './services/geminiService';
 import { loadTasksFromDB, saveTasksToDB, loadSettingsFromDB, saveSettingsToDB } from './utils/db';
 import { clearStoredApiKey, getStoredApiKey, saveStoredApiKey } from './utils/apiKeyStorage';
 import { processAntiAI } from './utils/imageProcessor';
 import { extractMentionNames, formatProtectedReferenceMention, formatReferenceMention, replaceReferenceMention } from './utils/referenceMentions';
-import { getSupportedYunwuAspectRatios, getSupportedYunwuImageSizes, getYunwuResolutionLabel, getYunwuResolutionSummary, supportsYunwuImageSize } from './utils/yunwuImageCapabilities';
+import { getAspectRatioValidationMessage, getSupportedYunwuAspectRatios, getSupportedYunwuImageSizes, getYunwuResolutionLabel, getYunwuResolutionSummary, normalizeAspectRatio, supportsYunwuImageSize } from './utils/yunwuImageCapabilities';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 
 const LEGACY_YUNWU_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const DEFAULT_PROVIDER: ServiceProvider = 'yunwu';
+const FIXED_PROVIDER_IMAGE_MODELS: Record<ServiceProvider, string> = {
+  yunwu: 'gemini-3.1-flash-image-preview',
+  apimart: 'gpt-image-2'
+};
+const MODEL_SLOGAN = '云雾用香蕉模型，APIMart 用 GPT-2 模型';
+
+type ExternalImageJob = {
+  id: string;
+  name: string;
+  source: string;
+  processed?: string;
+  mimeType: string;
+  status: 'idle' | 'processing' | 'done' | 'failed';
+  error?: string;
+};
 
 const createReferenceImageItem = (imageData: string, name: string): ReferenceImageItem => ({
   id: Math.random().toString(36).substr(2, 9),
@@ -141,17 +157,21 @@ const normalizeTask = (task: any): GenerationTask => {
 };
 
 const normalizeLoadedSettings = (rawSettings: any): Partial<AppSettings> => {
-  const defaultImageModel = getDefaultImageModel();
-  const defaultTextModel = getDefaultTextModel();
+  const defaultYunwuTextModel = getDefaultTextModel('yunwu');
+  const defaultAPIMartTextModel = getDefaultTextModel('apimart');
 
-  const rawImageModel = rawSettings?.yunwuImageModel || rawSettings?.providerImageModels?.yunwu || defaultImageModel;
-  const rawTextModel = rawSettings?.yunwuTextModel || rawSettings?.providerTextModels?.yunwu || defaultTextModel;
+  const rawYunwuTextModel = rawSettings?.yunwuTextModel || rawSettings?.providerTextModels?.yunwu || defaultYunwuTextModel;
+  const rawAPIMartTextModel = rawSettings?.apimartTextModel || rawSettings?.providerTextModels?.apimart || defaultAPIMartTextModel;
 
   return {
     ...rawSettings,
+    activeProvider: rawSettings?.activeProvider === 'apimart' ? 'apimart' : DEFAULT_PROVIDER,
     referenceLibrary: normalizeReferenceLibrary(rawSettings?.referenceLibrary),
-    yunwuImageModel: rawImageModel === LEGACY_YUNWU_IMAGE_MODEL ? defaultImageModel : rawImageModel,
-    yunwuTextModel: rawTextModel || defaultTextModel
+    defaultAspectRatio: normalizeAspectRatio(rawSettings?.defaultAspectRatio || "1:1"),
+    yunwuImageModel: FIXED_PROVIDER_IMAGE_MODELS.yunwu,
+    yunwuTextModel: rawYunwuTextModel || defaultYunwuTextModel,
+    apimartImageModel: FIXED_PROVIDER_IMAGE_MODELS.apimart,
+    apimartTextModel: rawAPIMartTextModel || defaultAPIMartTextModel
   };
 };
 
@@ -163,8 +183,11 @@ const App: React.FC = () => {
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   
   const [settings, setSettings] = useState<AppSettings>({
-    yunwuImageModel: getDefaultImageModel(),
-    yunwuTextModel: getDefaultTextModel(),
+    activeProvider: DEFAULT_PROVIDER,
+    yunwuImageModel: FIXED_PROVIDER_IMAGE_MODELS.yunwu,
+    yunwuTextModel: getDefaultTextModel('yunwu'),
+    apimartImageModel: FIXED_PROVIDER_IMAGE_MODELS.apimart,
+    apimartTextModel: getDefaultTextModel('apimart'),
     defaultAspectRatio: "1:1",
     defaultImageSize: "1K",
     referenceLibrary: [],
@@ -223,14 +246,19 @@ const App: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState<boolean>(false);
   const [showApiKeyEditor, setShowApiKeyEditor] = useState<boolean>(false);
   const [showReferenceLibrary, setShowReferenceLibrary] = useState<boolean>(false);
+  const [showExternalImageProcessor, setShowExternalImageProcessor] = useState<boolean>(false);
   const [showApiKeyValue, setShowApiKeyValue] = useState<boolean>(false);
   const [batchReferenceId, setBatchReferenceId] = useState<string>('');
   const [apiKeyInput, setApiKeyInput] = useState<string>('');
   const [importText, setImportText] = useState<string>('');
+  const [externalImageJobs, setExternalImageJobs] = useState<ExternalImageJob[]>([]);
+  const [externalAntiAILevel, setExternalAntiAILevel] = useState<AntiAILevel>('medium');
+  const [isExternalImageProcessing, setIsExternalImageProcessing] = useState<boolean>(false);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'error' | 'success' } | null>(null);
   
   const csvInputRef = useRef<HTMLInputElement>(null);
   const globalRefInputRef = useRef<HTMLInputElement>(null);
+  const externalImageInputRef = useRef<HTMLInputElement>(null);
   
   // 队列控制引用
   const stopRef = useRef(false);
@@ -250,8 +278,8 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    setApiKeyInput(getStoredApiKey());
-    setIsApiKeySelected(hasConfiguredApiKey());
+    setApiKeyInput(getStoredApiKey(DEFAULT_PROVIDER));
+    setIsApiKeySelected(hasConfiguredApiKey(DEFAULT_PROVIDER));
   }, []);
 
   useEffect(() => {
@@ -263,34 +291,44 @@ const App: React.FC = () => {
   }, [batchReferenceId, settings.referenceLibrary]);
 
   useEffect(() => {
-    const supportedAspectRatios = getSupportedYunwuAspectRatios(settings.yunwuImageModel);
-    const supportedImageSizes = getSupportedYunwuImageSizes(settings.yunwuImageModel);
+    setApiKeyInput(getStoredApiKey(settings.activeProvider));
+    setIsApiKeySelected(hasConfiguredApiKey(settings.activeProvider));
+  }, [settings.activeProvider]);
 
-    if (!supportedAspectRatios.includes(settings.defaultAspectRatio) || !supportedImageSizes.includes(settings.defaultImageSize)) {
+  useEffect(() => {
+    const activeImageModel = FIXED_PROVIDER_IMAGE_MODELS[settings.activeProvider];
+    const supportedAspectRatios = getSupportedYunwuAspectRatios(activeImageModel);
+    const supportedImageSizes = getSupportedYunwuImageSizes(activeImageModel);
+    const normalizedDefaultAspectRatio = normalizeAspectRatio(settings.defaultAspectRatio);
+    const isSupportedAspectRatio = supportedAspectRatios.includes(normalizedDefaultAspectRatio);
+
+    if (!isSupportedAspectRatio || !supportedImageSizes.includes(settings.defaultImageSize)) {
       setSettings(prev => ({
         ...prev,
-        defaultAspectRatio: supportedAspectRatios.includes(prev.defaultAspectRatio) ? prev.defaultAspectRatio : supportedAspectRatios[0],
+        defaultAspectRatio: supportedAspectRatios.includes(normalizeAspectRatio(prev.defaultAspectRatio))
+          ? normalizeAspectRatio(prev.defaultAspectRatio)
+          : supportedAspectRatios[0],
         defaultImageSize: supportedImageSizes.includes(prev.defaultImageSize) ? prev.defaultImageSize : supportedImageSizes[0]
       }));
     }
-  }, [settings.defaultAspectRatio, settings.defaultImageSize, settings.yunwuImageModel]);
+  }, [settings.activeProvider, settings.defaultAspectRatio, settings.defaultImageSize]);
 
   const handleRecheckApiKey = () => {
-    const providerLabel = getProviderLabel();
-    const hasKey = hasConfiguredApiKey();
+    const providerLabel = getProviderLabel(settings.activeProvider);
+    const hasKey = hasConfiguredApiKey(settings.activeProvider);
     setIsApiKeySelected(hasKey);
     showToast(hasKey ? `已检测到 ${providerLabel} API Key` : `未检测到 ${providerLabel} API Key，请填写后保存`, hasKey ? "success" : "error");
   };
 
   const handleSaveApiKey = () => {
     const normalizedKey = apiKeyInput.trim();
-    const providerLabel = getProviderLabel();
+    const providerLabel = getProviderLabel(settings.activeProvider);
     if (!normalizedKey) {
       showToast(`请输入 ${providerLabel} API Key`, "error");
       return;
     }
 
-    saveStoredApiKey(normalizedKey);
+    saveStoredApiKey(settings.activeProvider, normalizedKey);
     setApiKeyInput(normalizedKey);
     setIsApiKeySelected(true);
     setShowApiKeyEditor(false);
@@ -298,10 +336,10 @@ const App: React.FC = () => {
   };
 
   const handleClearApiKey = () => {
-    const providerLabel = getProviderLabel();
-    clearStoredApiKey();
+    const providerLabel = getProviderLabel(settings.activeProvider);
+    clearStoredApiKey(settings.activeProvider);
     setApiKeyInput('');
-    setIsApiKeySelected(hasConfiguredApiKey());
+    setIsApiKeySelected(hasConfiguredApiKey(settings.activeProvider));
     setShowApiKeyEditor(false);
     setShowApiKeyValue(false);
     showToast(`已清除本地保存的 ${providerLabel} API Key`, "success");
@@ -342,6 +380,15 @@ const App: React.FC = () => {
     });
   };
 
+  const readOriginalImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = event => resolve(String(event.target?.result || ''));
+      reader.onerror = () => reject(new Error('外部图片读取失败'));
+      reader.readAsDataURL(file);
+    });
+  };
+
   const getImageDimensions = (imageDataUrl: string): Promise<{ width: number; height: number }> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -352,7 +399,7 @@ const App: React.FC = () => {
   };
 
   const handleGlobalRefUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+    const files = Array.from(e.currentTarget.files || []) as File[];
     if (files.length === 0) return;
     try {
       const processedReferences = await Promise.all(
@@ -385,6 +432,99 @@ const App: React.FC = () => {
     } catch (err) {
       showToast("参考图处理失败", "error");
     } finally { e.target.value = ''; }
+  };
+
+  const handleExternalImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.currentTarget.files || []) as File[];
+    if (files.length === 0) return;
+
+    try {
+      const nextJobs = await Promise.all(
+        files.map(async (file) => ({
+          id: Math.random().toString(36).substr(2, 9),
+          name: file.name.replace(/\.[^/.]+$/, ''),
+          source: await readOriginalImage(file),
+          mimeType: file.type || 'image/jpeg',
+          status: 'idle' as const
+        }))
+      );
+
+      setExternalImageJobs(prev => [...prev, ...nextJobs]);
+      setShowExternalImageProcessor(true);
+      showToast(`已载入 ${nextJobs.length} 张外部图片，可以批量处理`, 'success');
+    } catch {
+      showToast('外部图片读取失败', 'error');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleProcessExternalImages = async () => {
+    if (externalImageJobs.length === 0) {
+      showToast('请先上传图片', 'error');
+      return;
+    }
+
+    setIsExternalImageProcessing(true);
+    try {
+      for (const job of externalImageJobs) {
+        setExternalImageJobs(prev => prev.map(item => (
+          item.id === job.id
+            ? { ...item, status: 'processing', error: undefined }
+            : item
+        )));
+
+        try {
+          const processedImage = await processAntiAI(job.source, externalAntiAILevel);
+          const nextMimeType = (processedImage.match(/^data:([^;]+);base64,/) || [])[1] || 'image/jpeg';
+          setExternalImageJobs(prev => prev.map(item => (
+            item.id === job.id
+              ? { ...item, processed: processedImage, mimeType: nextMimeType, status: 'done' }
+              : item
+          )));
+        } catch {
+          setExternalImageJobs(prev => prev.map(item => (
+            item.id === job.id
+              ? { ...item, status: 'failed', error: '处理失败，请重试' }
+              : item
+          )));
+        }
+      }
+
+      showToast('批量处理完成，可以一键打包下载', 'success');
+    } finally {
+      setIsExternalImageProcessing(false);
+    }
+  };
+
+  const handleDownloadExternalImages = async () => {
+    const completedJobs = externalImageJobs.filter(job => job.processed);
+    if (completedJobs.length === 0) {
+      showToast('当前没有已处理完成的图片可下载', 'error');
+      return;
+    }
+
+    const zip = new JSZip();
+    completedJobs.forEach(job => {
+      const mimeType = (job.processed!.match(/^data:([^;]+);base64,/) || [])[1] || job.mimeType;
+      const extension = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+      zip.file(`${job.name}-${externalAntiAILevel}.${extension}`, job.processed!.split(',')[1], { base64: true });
+    });
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(content);
+    link.download = `anti-ai-batch-${Date.now()}.zip`;
+    link.click();
+    showToast(`已打包导出 ${completedJobs.length} 张处理后的图片`, 'success');
+  };
+
+  const handleRemoveExternalImage = (jobId: string) => {
+    setExternalImageJobs(prev => prev.filter(job => job.id !== jobId));
+  };
+
+  const handleClearExternalImages = () => {
+    setExternalImageJobs([]);
   };
 
   const handleReferenceLibraryRename = (referenceId: string, nextName: string) => {
@@ -488,6 +628,7 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       prompt,
       status: TaskStatus.IDLE,
+      statusMessage: '等待开始',
       progress: 0,
       config: {
         aspectRatio: settings.defaultAspectRatio,
@@ -514,6 +655,7 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9),
       prompt,
       status: TaskStatus.IDLE,
+      statusMessage: '等待开始',
       progress: 0,
       config: {
         aspectRatio: settings.defaultAspectRatio,
@@ -545,58 +687,114 @@ const App: React.FC = () => {
     } finally { e.target.value = ''; }
   };
 
+  const updateTaskState = (taskId: string, updater: (task: GenerationTask) => GenerationTask) => {
+    setTasks(prev => prev.map(task => (task.id === taskId ? updater(task) : task)));
+  };
+
   const runSingleTask = async (task: GenerationTask) => {
     if (stopRef.current || pausedRef.current) return;
+    const providerLabel = getProviderLabel(settings.activeProvider);
+
+    const aspectRatioValidationMessage = getAspectRatioValidationMessage(task.config.aspectRatio);
+    if (aspectRatioValidationMessage) {
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.FAILED,
+        statusMessage: '比例设置不支持',
+        error: aspectRatioValidationMessage
+      }));
+      return;
+    }
     
     // 如果处于全局冷却中（刚报过 429），先等待
     const cooldownRemainingMs = globalCooldownUntilRef.current - Date.now();
     if (cooldownRemainingMs > 0) {
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.PENDING,
+        statusMessage: `${providerLabel} 限流冷却中，约 ${Math.ceil(cooldownRemainingMs / 1000)} 秒后继续`
+      }));
       await new Promise(r => setTimeout(r, cooldownRemainingMs));
     }
 
-    setTasks(prev => prev.map(t => t.id === task.id ? {
-      ...t,
+    updateTaskState(task.id, currentTask => ({
+      ...currentTask,
       status: TaskStatus.PROCESSING,
+      statusMessage: settings.forceRealisticPrompt ? '正在改写提示词' : '正在准备生图请求',
       error: undefined,
       outputWidth: undefined,
       outputHeight: undefined
-    } : t));
+    }));
     
     try {
       const finalPrompt = await preparePromptForImage(
         task.prompt,
         settings.forceRealisticPrompt,
-        settings.yunwuTextModel
+        settings.activeProvider,
+        settings.activeProvider === 'apimart' ? settings.apimartTextModel : settings.yunwuTextModel
       );
+
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.PROCESSING,
+        statusMessage: `正在向 ${providerLabel} 提交生图请求`
+      }));
 
       const rawResultUrl = await generateImage(
         finalPrompt,
         task.config.aspectRatio,
         task.config.imageSize,
+        settings.activeProvider,
         settings.referenceLibrary,
-        settings.yunwuImageModel
+        FIXED_PROVIDER_IMAGE_MODELS[settings.activeProvider],
+        task.prompt
       );
       
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.PROCESSING,
+        statusMessage: settings.antiAILevel === 'off' ? '正在读取输出尺寸' : '正在进行后处理'
+      }));
+
       const resultUrl = await processAntiAI(rawResultUrl, settings.antiAILevel);
+
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.PROCESSING,
+        statusMessage: '正在读取输出尺寸'
+      }));
+
       const outputDimensions = await getImageDimensions(resultUrl);
 
-      setTasks(prev => prev.map(t => t.id === task.id ? {
-        ...t,
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
         status: TaskStatus.COMPLETED,
+        statusMessage: '生成完成',
         resultUrl,
         outputWidth: outputDimensions.width,
         outputHeight: outputDimensions.height
-      } : t));
+      }));
     } catch (err: any) {
       let errorMsg = err.message || "未知故障";
-      const providerLabel = getProviderLabel();
       if (errorMsg === 'API_KEY_EXPIRED' || errorMsg === 'API_KEY_MISSING') {
         setIsApiKeySelected(false);
         stopRef.current = true; // 停止队列
         showToast(errorMsg === 'API_KEY_MISSING' ? `未检测到 ${providerLabel} API Key，请先填写并保存` : `${providerLabel} API Key 无效或无权限访问该模型，请重新配置`, "error");
       }
       
-      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: TaskStatus.FAILED, error: errorMsg === 'API_KEY_EXPIRED' ? `${providerLabel} API Key 无效或无权限` : errorMsg === 'API_KEY_MISSING' ? `未配置 ${providerLabel} API Key` : errorMsg } : t));
+      const finalErrorMessage =
+        errorMsg === 'API_KEY_EXPIRED'
+          ? `${providerLabel} API Key 无效或无权限`
+          : errorMsg === 'API_KEY_MISSING'
+            ? `未配置 ${providerLabel} API Key`
+            : errorMsg;
+
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.FAILED,
+        statusMessage: errorMsg.includes('429') ? `${providerLabel} 限流，请稍后重试` : '生成失败',
+        error: finalErrorMessage
+      }));
       
       // 如果报错 429，触发全局冷却，让后续任务慢一点
       if (errorMsg.includes('429')) {
@@ -614,6 +812,13 @@ const App: React.FC = () => {
     pausedRef.current = false;
     stopRef.current = false;
     currentIndexRef.current = 0;
+
+    const taskIds = new Set(taskList.map(task => task.id));
+    setTasks(prev => prev.map(task => (
+      taskIds.has(task.id)
+        ? { ...task, status: TaskStatus.PENDING, statusMessage: '排队等待中', error: undefined }
+        : task
+    )));
     
     const maxConcurrency = Math.min(settings.concurrency, taskList.length);
 
@@ -645,7 +850,11 @@ const App: React.FC = () => {
   const handleStop = () => {
     stopRef.current = true;
     setIsProcessing(false);
-    setTasks(prev => prev.map(t => t.status === TaskStatus.PROCESSING ? { ...t, status: TaskStatus.IDLE } : t));
+    setTasks(prev => prev.map(task => (
+      task.status === TaskStatus.PROCESSING || task.status === TaskStatus.PENDING
+        ? { ...task, status: TaskStatus.PAUSED, statusMessage: '已手动停止，可重新开始' }
+        : task
+    )));
   };
 
   const handleBulkExport = async () => {
@@ -663,14 +872,31 @@ const App: React.FC = () => {
   };
 
   const selectedCount = tasks.filter(t => t.selected).length;
-  const providerLabel = getProviderLabel();
-  const activeImageModel = settings.yunwuImageModel || getDefaultImageModel();
-  const activeTextModel = settings.yunwuTextModel || getDefaultTextModel();
+  const providerLabel = getProviderLabel(settings.activeProvider);
+  const activeImageModel = FIXED_PROVIDER_IMAGE_MODELS[settings.activeProvider];
+  const activeTextModel = settings.activeProvider === 'apimart'
+    ? (settings.apimartTextModel || getDefaultTextModel('apimart'))
+    : (settings.yunwuTextModel || getDefaultTextModel('yunwu'));
   const selectedBatchReference = settings.referenceLibrary.find(reference => reference.id === batchReferenceId);
   const supportedAspectRatios = getSupportedYunwuAspectRatios(activeImageModel);
   const supportedImageSizes = getSupportedYunwuImageSizes(activeImageModel);
   const supportsExplicitImageSize = supportsYunwuImageSize(activeImageModel);
   const defaultResolutionSummary = getYunwuResolutionSummary(activeImageModel, settings.defaultAspectRatio, settings.defaultImageSize);
+  const currentDefaultAspectRatio = normalizeAspectRatio(settings.defaultAspectRatio);
+
+  const applyDefaultAspectRatio = (aspectRatio: string) => {
+    const normalizedRatio = normalizeAspectRatio(aspectRatio);
+    const validationMessage = getAspectRatioValidationMessage(normalizedRatio);
+    if (validationMessage) {
+      showToast(validationMessage, "error");
+      return;
+    }
+
+    setSettings(prev => ({
+      ...prev,
+      defaultAspectRatio: normalizedRatio
+    }));
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
@@ -681,7 +907,25 @@ const App: React.FC = () => {
               <i className="fa-solid fa-wand-sparkles"></i>
             </div>
             <h1 className="text-2xl font-black text-slate-800 mb-4 tracking-tight">批量生图大师 Pro</h1>
-            <p className="text-slate-500 text-sm mb-4 leading-relaxed">当前仅使用 <b>{providerLabel}</b>。在这里填写一次 API Key 后会自动保存在当前浏览器。</p>
+            <p className="text-slate-500 text-sm mb-4 leading-relaxed">当前可切换 <b>云雾API</b> 和 <b>APIMart</b>。在这里填写当前服务商的 API Key 后会自动保存在当前浏览器。</p>
+            <div className="flex justify-center gap-2 mb-5">
+              {([
+                { value: 'yunwu', label: '云雾API' },
+                { value: 'apimart', label: 'APIMart' }
+              ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+                <button
+                  key={provider.value}
+                  onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
+                  className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                    settings.activeProvider === provider.value
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {provider.label}
+                </button>
+              ))}
+            </div>
             <div className="text-left mb-5">
               <label className="block text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">{providerLabel} API Key</label>
               <div className="flex gap-2">
@@ -697,17 +941,10 @@ const App: React.FC = () => {
                 </button>
               </div>
             </div>
-            <div className="text-left mb-4">
-              <label className="block text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">图像模型</label>
-              <input
-                value={activeImageModel}
-                onChange={(e) => setSettings(prev => ({
-                  ...prev,
-                  yunwuImageModel: e.target.value
-                }))}
-                placeholder="例如 gemini-3.1-flash-image-preview"
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-medium outline-none focus:border-blue-400"
-              />
+            <div className="text-left mb-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+              <div className="text-[10px] font-black uppercase tracking-widest text-blue-500">固定生图模型</div>
+              <div className="mt-1 text-sm font-black text-slate-800">{MODEL_SLOGAN}</div>
+              <div className="mt-2 text-[11px] font-bold text-blue-700">{providerLabel}: <code>{activeImageModel}</code></div>
             </div>
             <div className="text-left mb-5">
               <label className="block text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">文本模型</label>
@@ -715,9 +952,9 @@ const App: React.FC = () => {
                 value={activeTextModel}
                 onChange={(e) => setSettings(prev => ({
                   ...prev,
-                  yunwuTextModel: e.target.value
+                  [settings.activeProvider === 'apimart' ? 'apimartTextModel' : 'yunwuTextModel']: e.target.value
                 }))}
-                placeholder="例如 gemini-3-pro-preview"
+                placeholder={settings.activeProvider === 'apimart' ? '例如 gemini-2.5-pro' : '例如 gemini-3-pro-preview'}
                 className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-medium outline-none focus:border-blue-400"
               />
             </div>
@@ -736,6 +973,7 @@ const App: React.FC = () => {
 
       <input type="file" ref={csvInputRef} accept=".txt,.csv,.xlsx,.xls" className="hidden" onChange={handleFileImport} />
       <input type="file" ref={globalRefInputRef} accept="image/*" multiple className="hidden" onChange={handleGlobalRefUpload} />
+      <input type="file" ref={externalImageInputRef} accept="image/*" multiple className="hidden" onChange={handleExternalImageUpload} />
 
       {/* Toast */}
       {toast && (
@@ -756,14 +994,36 @@ const App: React.FC = () => {
             <i className="fa-solid fa-palette"></i>
           </div>
           <h1 className="text-xl font-black tracking-tight">生图大师 <span className="text-blue-600 text-[10px] bg-blue-50 px-2 py-0.5 rounded-full ml-2 border border-blue-100 font-bold">V3.0</span></h1>
+          <div className="hidden xl:flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-black text-amber-800">
+            <i className="fa-solid fa-bolt text-amber-500"></i>
+            {MODEL_SLOGAN}
+          </div>
           <button onClick={() => setShowReferenceLibrary(true)} className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-[11px] font-black flex items-center gap-2 hover:bg-slate-50">
             <i className="fa-solid fa-images text-blue-600"></i> 参考图库
             <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">{settings.referenceLibrary.length}</span>
           </button>
         </div>
         <div className="flex gap-2">
+          <div className="flex rounded-xl border border-slate-200 bg-white p-1">
+            {([
+              { value: 'yunwu', label: '云雾' },
+              { value: 'apimart', label: 'APIMart' }
+            ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+              <button
+                key={provider.value}
+                onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black transition-all ${
+                  settings.activeProvider === provider.value
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {provider.label}
+              </button>
+            ))}
+          </div>
           <button onClick={() => setShowApiKeyEditor(true)} className="bg-white border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 hover:bg-slate-50">
-            <i className="fa-solid fa-key"></i> 云雾API Key
+            <i className="fa-solid fa-key"></i> {providerLabel} Key
           </button>
           {isProcessing ? (
             <button onClick={handleStop} className="bg-red-600 text-white px-6 py-2.5 rounded-xl text-xs font-black flex items-center gap-2 hover:opacity-90 shadow-lg shadow-red-500/20">
@@ -784,18 +1044,6 @@ const App: React.FC = () => {
 
       {/* Control Panel */}
       <div className="p-4 md:px-8 border-b border-slate-200 bg-white grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-        <div className="md:col-span-4 flex flex-col gap-1.5">
-          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">当前图像模型</span>
-          <input
-            value={activeImageModel}
-            onChange={(e) => setSettings(prev => ({
-              ...prev,
-              yunwuImageModel: e.target.value
-            }))}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-black outline-none focus:border-blue-400"
-          />
-        </div>
-
         <div className="md:col-span-3 flex flex-col gap-1.5 group">
            <div className="flex justify-between items-center">
              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">并发限制: {settings.concurrency}</span>
@@ -805,11 +1053,15 @@ const App: React.FC = () => {
            <span className="text-[7px] font-bold text-slate-400 opacity-60 group-hover:opacity-100 transition-opacity">频繁 429 请调至 1-2</span>
         </div>
 
-        <div className="md:col-span-2 flex flex-col gap-1.5">
+        <div className="md:col-span-2 flex flex-col gap-2">
           <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">默认比例</span>
-          <select value={settings.defaultAspectRatio} onChange={(e) => setSettings(s => ({ ...s, defaultAspectRatio: e.target.value as AspectRatio }))} className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-black outline-none focus:border-blue-400">
+          <select value={supportedAspectRatios.includes(currentDefaultAspectRatio) ? currentDefaultAspectRatio : supportedAspectRatios[0]} onChange={(e) => {
+            applyDefaultAspectRatio(e.target.value);
+          }} className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-black outline-none focus:border-blue-400">
             {supportedAspectRatios.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
+          <span className="text-[8px] font-bold text-slate-400">当前默认比例：{currentDefaultAspectRatio}</span>
+          <span className="text-[8px] font-bold text-slate-400">{providerLabel} 支持：{supportedAspectRatios.join(' / ')}</span>
         </div>
 
         <div className="md:col-span-3 flex flex-col gap-1.5">
@@ -852,6 +1104,16 @@ const App: React.FC = () => {
           </div>
           <span className="text-xs font-black text-slate-700">去 AI 标识设置</span>
         </div>
+
+        <button
+          onClick={() => {
+            setExternalAntiAILevel(settings.antiAILevel);
+            setShowExternalImageProcessor(true);
+          }}
+          className="bg-white border border-slate-200 px-4 py-2 rounded-xl text-[11px] font-black text-slate-700 flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm"
+        >
+          <i className="fa-solid fa-image text-blue-600"></i> 单独处理图片
+        </button>
         
         <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">后处理强度</span>
@@ -919,6 +1181,7 @@ const App: React.FC = () => {
                     ...task,
                     id: Math.random().toString(36).substr(2, 9),
                     status: TaskStatus.IDLE,
+                    statusMessage: '等待开始',
                     resultUrl: undefined,
                     outputWidth: undefined,
                     outputHeight: undefined,
@@ -951,11 +1214,12 @@ const App: React.FC = () => {
              <div className="flex-1 flex flex-wrap gap-6 items-start min-w-0">
                 <div className="flex flex-col gap-2">
                   <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">比例</span>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     {supportedAspectRatios.map(r => (
-                      <button key={r} onClick={() => updateBatchConfig({ aspectRatio: r as AspectRatio })} className="text-[10px] font-black px-3 py-1.5 rounded-lg bg-white/5 hover:bg-blue-600 transition-all border border-white/10">{r}</button>
+                      <button key={r} onClick={() => updateBatchConfig({ aspectRatio: r })} className="text-[10px] font-black px-3 py-1.5 rounded-lg bg-white/5 hover:bg-blue-600 transition-all border border-white/10">{r}</button>
                     ))}
                   </div>
+                  <span className="text-[8px] font-bold text-slate-400">仅支持固定比例，不再支持自定义输入</span>
                 </div>
 
                 <div className="flex flex-col gap-2">
@@ -1127,11 +1391,34 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-slate-950/60 backdrop-blur-md animate-in fade-in">
           <div className="bg-white w-full max-w-xl rounded-[2rem] shadow-2xl overflow-hidden border border-slate-100">
             <div className="p-6 border-b flex items-center justify-between bg-slate-50/70">
-              <h2 className="text-lg font-black flex items-center gap-3"><i className="fa-solid fa-key text-blue-600"></i> 云雾API Key</h2>
+              <h2 className="text-lg font-black flex items-center gap-3"><i className="fa-solid fa-key text-blue-600"></i> {providerLabel} Key</h2>
               <button onClick={() => setShowApiKeyEditor(false)} className="text-slate-300 hover:text-slate-600"><i className="fa-solid fa-times text-xl"></i></button>
             </div>
             <div className="p-6">
+              <div className="flex gap-2 mb-4">
+                {([
+                  { value: 'yunwu', label: '云雾API' },
+                  { value: 'apimart', label: 'APIMart' }
+                ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+                  <button
+                    key={provider.value}
+                    onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
+                    className={`px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                      settings.activeProvider === provider.value
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {provider.label}
+                  </button>
+                ))}
+              </div>
               <p className="text-sm text-slate-500 leading-relaxed mb-4">当前正在编辑 <b>{providerLabel}</b>。填写后会保存在当前浏览器本地，下次打开页面会自动使用。若同时配置了 <code>.env.local</code>，这里保存的 Key 会优先生效。</p>
+              <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="text-[10px] font-black uppercase tracking-widest text-amber-600">当前固定模型</div>
+                <div className="mt-1 text-sm font-black text-amber-950">{MODEL_SLOGAN}</div>
+                <div className="mt-2 text-[11px] font-bold text-amber-700">{providerLabel}: <code>{activeImageModel}</code></div>
+              </div>
               <label className="block text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Key 内容</label>
               <div className="flex gap-2">
                 <input
@@ -1147,12 +1434,178 @@ const App: React.FC = () => {
               </div>
               <p className="text-[11px] text-slate-400 mt-3">当前图像模型：<code>{activeImageModel}</code></p>
               <p className="text-[11px] text-slate-400 mt-1">当前文本模型：<code>{activeTextModel}</code></p>
-              <p className="text-[11px] text-amber-600 mt-3 leading-relaxed">如果报“分组 default 下模型无可用渠道”，通常不是前端错误，而是云雾账号没有为这个模型开通通道。你可以先在这里换供应商给你的可用模型名再试。</p>
+              <p className="text-[11px] text-amber-600 mt-3 leading-relaxed">
+                {settings.activeProvider === 'yunwu'
+                  ? '云雾当前固定使用 gemini-3.1-flash-image-preview，也就是香蕉模型。'
+                  : 'APIMart 当前固定使用 gpt-image-2 模型。'}
+              </p>
             </div>
             <div className="p-6 bg-slate-50/80 border-t border-slate-100 flex gap-3">
               <button onClick={handleClearApiKey} className="px-5 py-3 text-red-600 font-black text-xs uppercase hover:bg-red-50 rounded-2xl transition-all">清除本地 Key</button>
               <button onClick={() => setShowApiKeyEditor(false)} className="flex-1 py-3 text-slate-500 font-black text-xs uppercase hover:bg-slate-200 rounded-2xl transition-all">关闭</button>
               <button onClick={handleSaveApiKey} className="flex-1 py-3 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase shadow-xl shadow-blue-500/20 hover:bg-blue-700 active:scale-95">保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showExternalImageProcessor && (
+        <div className="fixed inset-0 z-[115] flex items-center justify-center p-6 bg-slate-950/60 backdrop-blur-md animate-in fade-in">
+          <div className="bg-white w-full max-w-5xl max-h-[90vh] rounded-[2rem] shadow-2xl overflow-hidden border border-slate-100 flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between bg-slate-50/70">
+              <div>
+                <h2 className="text-lg font-black flex items-center gap-3">
+                  <i className="fa-solid fa-wand-magic-sparkles text-blue-600"></i> 单独处理图片
+                </h2>
+                <p className="mt-1 text-[11px] font-medium text-slate-500">
+                  上传外部图片后，单独执行“去 AI 标识”处理，再直接导出，不走生图流程。
+                </p>
+              </div>
+              <button onClick={() => setShowExternalImageProcessor(false)} className="text-slate-300 hover:text-slate-600">
+                <i className="fa-solid fa-times text-xl"></i>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 overflow-y-auto">
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={() => externalImageInputRef.current?.click()}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-[11px] font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700"
+                >
+                  <i className="fa-solid fa-upload mr-2"></i>批量上传图片
+                </button>
+
+                <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">处理强度</span>
+                  <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+                    {[
+                      { label: '关闭', value: 'off' },
+                      { label: '轻度', value: 'low' },
+                      { label: '中度', value: 'medium' },
+                      { label: '重度', value: 'high' }
+                    ].map(level => (
+                      <button
+                        key={level.value}
+                        onClick={() => setExternalAntiAILevel(level.value as AntiAILevel)}
+                        className={`px-3 py-1 rounded text-[10px] font-black transition-all ${
+                          externalAntiAILevel === level.value
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleProcessExternalImages}
+                  disabled={externalImageJobs.length === 0 || isExternalImageProcessing}
+                  className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-[11px] font-black text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isExternalImageProcessing ? '批量处理中...' : '批量处理'}
+                </button>
+
+                <button
+                  onClick={handleDownloadExternalImages}
+                  disabled={!externalImageJobs.some(job => job.processed)}
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[11px] font-black text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <i className="fa-solid fa-file-zipper mr-2"></i>批量下载 ZIP
+                </button>
+
+                <button
+                  onClick={handleClearExternalImages}
+                  disabled={externalImageJobs.length === 0}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[11px] font-black text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  清空列表
+                </button>
+
+                <span className="text-[11px] font-bold text-slate-400 truncate">
+                  当前共 {externalImageJobs.length} 张，已处理 {externalImageJobs.filter(job => job.processed).length} 张
+                </span>
+              </div>
+
+              {externalImageJobs.length === 0 ? (
+                <div className="rounded-[1.5rem] border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white text-slate-300 shadow-sm">
+                    <i className="fa-solid fa-layer-group text-2xl"></i>
+                  </div>
+                  <div className="text-sm font-black text-slate-500">还没有待处理图片</div>
+                  <div className="mt-1 text-[11px] font-medium text-slate-400">点击上面的“批量上传图片”后，就能统一处理再打包导出。</div>
+                </div>
+              ) : (
+                <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 overflow-hidden">
+                  <div className="grid grid-cols-[52px_minmax(0,1.5fr)_110px_110px_64px] gap-3 border-b border-slate-200 bg-white px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    <span>预览</span>
+                    <span>文件名</span>
+                    <span>处理状态</span>
+                    <span>导出状态</span>
+                    <span className="text-right">操作</span>
+                  </div>
+                  <div className="max-h-[52vh] overflow-y-auto divide-y divide-slate-200">
+                    {externalImageJobs.map(job => {
+                      const statusText =
+                        job.status === 'idle'
+                          ? '等待处理'
+                          : job.status === 'processing'
+                            ? '处理中'
+                            : job.status === 'done'
+                              ? '处理完成'
+                              : (job.error || '处理失败');
+                      const statusTone =
+                        job.status === 'processing'
+                          ? 'text-indigo-600'
+                          : job.status === 'done'
+                            ? 'text-emerald-600'
+                            : job.status === 'failed'
+                              ? 'text-red-600'
+                              : 'text-slate-500';
+
+                      return (
+                        <div key={job.id} className="grid grid-cols-[52px_minmax(0,1.5fr)_110px_110px_64px] gap-3 px-4 py-3 items-center bg-slate-50 text-[11px]">
+                          <div className="h-10 w-10 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                            <img src={job.processed || job.source} alt={`${job.name}-预览`} className="h-full w-full object-cover" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="truncate font-black text-slate-700">{job.name}</div>
+                            <div className="mt-1 truncate text-[10px] font-bold text-slate-400">
+                              {job.processed ? '已生成处理结果，可打包下载' : '原图已载入'}
+                            </div>
+                          </div>
+                          <div className={`font-black ${statusTone}`}>
+                            <div className="flex items-center gap-2">
+                              {job.status === 'processing' && <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />}
+                              {job.status === 'done' && <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />}
+                              {job.status === 'failed' && <span className="inline-flex h-2 w-2 rounded-full bg-red-500" />}
+                              {job.status === 'idle' && <span className="inline-flex h-2 w-2 rounded-full bg-slate-300" />}
+                              <span>{statusText}</span>
+                            </div>
+                          </div>
+                          <div className={`font-black ${job.processed ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {job.processed ? '可导出' : '未就绪'}
+                          </div>
+                          <div className="flex justify-end">
+                            <button
+                              onClick={() => handleRemoveExternalImage(job.id)}
+                              className="rounded-lg border border-red-100 bg-red-50 px-2.5 py-1.5 text-[10px] font-black text-red-600 hover:bg-red-100"
+                              title="移除这张图片"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-medium text-slate-500 leading-relaxed">
+                当前这个工具只处理图片后期，不会调用云雾生图接口。你可以一次上传多张图、统一处理，再批量打包下载 zip。
+              </div>
             </div>
           </div>
         </div>

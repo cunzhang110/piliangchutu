@@ -25,6 +25,48 @@ type ActiveMention = {
   end: number;
 };
 
+const getTaskStatusMeta = (task: GenerationTask) => {
+  switch (task.status) {
+    case TaskStatus.PENDING:
+      return {
+        label: '排队中',
+        tone: 'border-amber-100 bg-amber-50 text-amber-700',
+        detail: task.statusMessage || '任务已进入队列，等待执行'
+      };
+    case TaskStatus.PROCESSING:
+      return {
+        label: '处理中',
+        tone: 'border-blue-100 bg-blue-50 text-blue-700',
+        detail: task.statusMessage || '正在处理当前任务'
+      };
+    case TaskStatus.COMPLETED:
+      return {
+        label: '已完成',
+        tone: 'border-emerald-100 bg-emerald-50 text-emerald-700',
+        detail: task.statusMessage || '生成完成，可下载或重试'
+      };
+    case TaskStatus.FAILED:
+      return {
+        label: '失败',
+        tone: 'border-red-100 bg-red-50 text-red-700',
+        detail: task.error || task.statusMessage || '生成失败，请检查原因'
+      };
+    case TaskStatus.PAUSED:
+      return {
+        label: '已停止',
+        tone: 'border-slate-200 bg-slate-50 text-slate-600',
+        detail: task.statusMessage || '任务已手动停止'
+      };
+    case TaskStatus.IDLE:
+    default:
+      return {
+        label: '待生成',
+        tone: 'border-slate-200 bg-slate-50 text-slate-600',
+        detail: task.statusMessage || '等待开始'
+      };
+  }
+};
+
 const getActiveMentionAtCursor = (prompt: string, cursor: number): ActiveMention | null => {
   const beforeCursor = prompt.slice(0, cursor);
   const lastAtIndex = beforeCursor.lastIndexOf('@');
@@ -85,6 +127,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
   const hiddenPreviewCount = Math.max(mentionedReferences.length - previewReferences.length, 0);
   const activePreviewReference = previewReferences.find(reference => reference.id === hoveredReferenceId) || previewReferences[previewReferences.length - 1] || null;
   const unmatchedMentions = mentionNames.filter(name => !referenceLibrary.some(reference => reference.name === name));
+  const statusMeta = getTaskStatusMeta(task);
 
   const mentionSuggestions = useMemo(() => {
     if (!activeMention) return [];
@@ -249,6 +292,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             <div className="flex flex-col items-center gap-2">
               <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
               <span className="text-[10px] font-black text-blue-600 uppercase">生成中</span>
+              <span className="max-w-[80%] text-center text-[9px] font-bold text-slate-500">{task.statusMessage || '正在处理当前任务'}</span>
             </div>
           </div>
         )}
@@ -316,6 +360,16 @@ export const TaskCard: React.FC<TaskCardProps> = ({
 
         <div className="mt-2 text-[9px] font-bold text-slate-400">
           当前任务只负责执行。参考图请在页面左上角的参考图库中管理，输入 <code>@</code> 会自动弹出。
+        </div>
+
+        <div className={`mt-2 rounded-lg border px-2 py-1.5 ${statusMeta.tone}`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-black uppercase tracking-widest">{statusMeta.label}</span>
+            {task.status === TaskStatus.PROCESSING && (
+              <span className="inline-flex h-2 w-2 rounded-full bg-current animate-pulse" />
+            )}
+          </div>
+          <div className="mt-1 text-[9px] font-bold leading-relaxed">{statusMeta.detail}</div>
         </div>
 
         {mentionedReferences.length > 0 && (
