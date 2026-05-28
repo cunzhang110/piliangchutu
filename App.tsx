@@ -1200,7 +1200,7 @@ const App: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className={`sticky top-0 z-30 mb-6 overflow-hidden rounded-2xl border shadow-sm backdrop-blur transition-all ${
+            <div className={`sticky top-0 z-30 mb-6 rounded-2xl border shadow-sm backdrop-blur transition-all ${
               selectedCount > 0
                 ? 'border-blue-300 bg-blue-50/95 shadow-blue-500/10 ring-1 ring-blue-200'
                 : 'border-slate-200/70 bg-white/90'
