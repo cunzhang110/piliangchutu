@@ -75,6 +75,19 @@ export const removeReferenceMentions = (prompt: string) => {
     .trim();
 };
 
+export const removeReferenceMention = (prompt: string, referenceName: string) => {
+  const escapedReferenceName = referenceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bracePattern = new RegExp(`@\\{${escapedReferenceName}\\}`, 'g');
+  let nextPrompt = prompt.replace(bracePattern, ' ');
+
+  if (canUseSimpleMention(referenceName)) {
+    const simplePattern = new RegExp(`@${escapedReferenceName}(?=[\\s@,，。.!！?？;；:：]|$)`, 'g');
+    nextPrompt = nextPrompt.replace(simplePattern, ' ');
+  }
+
+  return nextPrompt.replace(/\s{2,}/g, ' ').trim();
+};
+
 export const replaceReferenceMention = (prompt: string, previousName: string, nextName: string) => {
   const escapedPreviousName = previousName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const bracePattern = new RegExp(`@\\{${escapedPreviousName}\\}`, 'g');

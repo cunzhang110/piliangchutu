@@ -6,7 +6,7 @@ import { generateImage, getDefaultTextModel, getProviderLabel, hasConfiguredApiK
 import { loadTasksFromDB, saveTasksToDB, loadSettingsFromDB, saveSettingsToDB } from './utils/db';
 import { clearStoredApiKey, getStoredApiKey, saveStoredApiKey } from './utils/apiKeyStorage';
 import { processAntiAI } from './utils/imageProcessor';
-import { extractMentionNames, formatProtectedReferenceMention, formatReferenceMention, replaceReferenceMention } from './utils/referenceMentions';
+import { extractMentionNames, formatProtectedReferenceMention, formatReferenceMention, removeReferenceMention, replaceReferenceMention } from './utils/referenceMentions';
 import { getAspectRatioValidationMessage, getSupportedYunwuAspectRatios, getSupportedYunwuImageSizes, getYunwuResolutionLabel, getYunwuResolutionSummary, normalizeAspectRatio, supportsYunwuImageSize } from './utils/yunwuImageCapabilities';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
@@ -249,6 +249,7 @@ const App: React.FC = () => {
   const [showExternalImageProcessor, setShowExternalImageProcessor] = useState<boolean>(false);
   const [showApiKeyValue, setShowApiKeyValue] = useState<boolean>(false);
   const [batchReferenceId, setBatchReferenceId] = useState<string>('');
+  const [showBatchReferencePicker, setShowBatchReferencePicker] = useState<boolean>(false);
   const [apiKeyInput, setApiKeyInput] = useState<string>('');
   const [importText, setImportText] = useState<string>('');
   const [externalImageJobs, setExternalImageJobs] = useState<ExternalImageJob[]>([]);
@@ -291,7 +292,7 @@ const App: React.FC = () => {
     if (!batchReferenceId) return;
     const stillExists = settings.referenceLibrary.some(reference => reference.id === batchReferenceId);
     if (!stillExists) {
-      setBatchReferenceId(settings.referenceLibrary[0]?.id || '');
+      setBatchReferenceId('');
     }
   }, [batchReferenceId, settings.referenceLibrary]);
 
@@ -585,47 +586,55 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleBatchReferenceApply = (mode: 'append' | 'replace') => {
-    const selectedReference = settings.referenceLibrary.find(reference => reference.id === batchReferenceId) || settings.referenceLibrary[0];
-    if (!selectedReference) {
-      showToast("参考图库里还没有可用图片", "error");
+  const handleBatchReferenceToggle = (reference: ReferenceImageItem) => {
+    const selectedTaskCount = tasks.filter(task => task.selected).length;
+    if (selectedTaskCount === 0) {
+      showToast("请先选择要批量修改的任务", "error");
       return;
     }
 
-    const selectedMention = formatProtectedReferenceMention(selectedReference.name);
+    const selectedMention = formatProtectedReferenceMention(reference.name);
+    const shouldRemove = batchReferenceId === reference.id;
 
     setTasks(prev => prev.map(task => {
       if (!task.selected) return task;
 
-      let nextPrompt = task.prompt.trim();
-      const currentReferenceNames = Array.from(
-        new Set(
-          extractMentionNames(nextPrompt).filter(name =>
-            settings.referenceLibrary.some(reference => reference.name === name)
-          )
-        )
-      );
-
-      if (mode === 'append') {
-        if (!currentReferenceNames.includes(selectedReference.name)) {
-          nextPrompt = `${nextPrompt}${nextPrompt ? ' ' : ''}${selectedMention}`.trim();
-        }
-        return { ...task, prompt: nextPrompt };
+      if (shouldRemove) {
+        return { ...task, prompt: removeReferenceMention(task.prompt, reference.name) };
       }
 
-      if (currentReferenceNames.length === 0) {
-        nextPrompt = `${nextPrompt}${nextPrompt ? ' ' : ''}${selectedMention}`.trim();
-        return { ...task, prompt: nextPrompt };
+      const currentReferenceNames = extractMentionNames(task.prompt);
+      if (currentReferenceNames.includes(reference.name)) {
+        return task;
       }
 
-      currentReferenceNames.forEach(referenceName => {
-        nextPrompt = replaceReferenceMention(nextPrompt, referenceName, selectedReference.name);
-      });
-
+      const nextPrompt = `${task.prompt.trim()}${task.prompt.trim() ? ' ' : ''}${selectedMention}`.trim();
       return { ...task, prompt: nextPrompt };
     }));
 
-    showToast(mode === 'append' ? `已把 ${selectedMention} 批量加入所选任务` : `已把所选任务的参考图批量替换为 ${selectedMention}`, "success");
+    setBatchReferenceId(shouldRemove ? '' : reference.id);
+    showToast(shouldRemove ? `已从已选任务移除 ${selectedMention}` : `已把 ${selectedMention} 加入 ${selectedTaskCount} 个任务`, "success");
+  };
+
+  const handleBatchReferenceClear = () => {
+    const selectedTaskCount = tasks.filter(task => task.selected).length;
+    if (selectedTaskCount === 0) {
+      showToast("请先选择要清除参考图的任务", "error");
+      return;
+    }
+
+    setTasks(prev => prev.map(task => {
+      if (!task.selected) return task;
+
+      const nextPrompt = settings.referenceLibrary.reduce(
+        (prompt, reference) => removeReferenceMention(prompt, reference.name),
+        task.prompt
+      );
+
+      return { ...task, prompt: nextPrompt };
+    }));
+    setBatchReferenceId('');
+    showToast(`已清除 ${selectedTaskCount} 个任务里的参考图标记`, "success");
   };
 
   const addTask = (prompt: string = '') => {
@@ -1191,7 +1200,11 @@ const App: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className="sticky top-0 z-30 mb-6 overflow-hidden rounded-2xl border border-slate-200/70 bg-white/90 shadow-sm backdrop-blur">
+            <div className={`sticky top-0 z-30 mb-6 overflow-hidden rounded-2xl border shadow-sm backdrop-blur transition-all ${
+              selectedCount > 0
+                ? 'border-blue-300 bg-blue-50/95 shadow-blue-500/10 ring-1 ring-blue-200'
+                : 'border-slate-200/70 bg-white/90'
+            }`}>
               <div className="flex flex-wrap items-center justify-between gap-3 p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <button onClick={() => addTask()} className="rounded-xl bg-blue-600 px-4 py-2 text-[11px] font-black text-white shadow-lg shadow-blue-500/15 hover:bg-blue-700 active:scale-95">
@@ -1202,17 +1215,32 @@ const App: React.FC = () => {
                   </button>
                   <div className="mx-2 hidden h-5 w-px bg-slate-200 sm:block"></div>
                   <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: true })))} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[10px] font-black text-blue-600 transition-all hover:bg-blue-50">全选</button>
-                  <button onClick={() => setTasks(prev => prev.map(t => ({ ...t, selected: false })))} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[10px] font-black text-slate-500 hover:bg-slate-50">清空选择</button>
+                  <button
+                    onClick={() => {
+                      setTasks(prev => prev.map(t => ({ ...t, selected: false })));
+                      setBatchReferenceId('');
+                      setShowBatchReferencePicker(false);
+                    }}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[10px] font-black text-slate-500 hover:bg-slate-50"
+                  >
+                    清空选择
+                  </button>
                   <button onClick={() => setTasks(prev => prev.map(t => t.status === TaskStatus.FAILED ? { ...t, selected: true } : t))} className="rounded-xl bg-red-50 px-4 py-2 text-[10px] font-black text-red-700 transition-all hover:bg-red-100">选中失败项</button>
                 </div>
                 <div className="flex items-center gap-3 pr-2">
                   <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">任务总数: <span className="text-slate-800">{tasks.length}</span></span>
-                  <span className="border-l border-slate-200 pl-3 text-[10px] font-black uppercase tracking-widest text-slate-400">已选: <span className="text-blue-600">{selectedCount}</span></span>
+                  <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest transition-all ${
+                    selectedCount > 0
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                      : 'bg-slate-100 text-slate-400'
+                  }`}>
+                    批量编辑: {selectedCount}
+                  </span>
                 </div>
               </div>
 
               {selectedCount > 0 && (
-                <div className="border-t border-slate-200 bg-slate-50/90 px-3 py-3">
+                <div className="border-t border-blue-200 bg-blue-100/70 px-3 py-3">
                   <div className="flex flex-wrap items-end gap-4">
                     <div className="flex min-w-[220px] flex-col gap-2">
                       <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">批量比例</span>
@@ -1247,27 +1275,72 @@ const App: React.FC = () => {
                       应用到已选 {selectedCount} 个任务
                     </button>
 
-                    <div className="h-8 w-px bg-slate-200"></div>
+                    <div className="h-8 w-px bg-blue-200"></div>
 
-                    <div className="flex min-w-[260px] flex-col gap-2">
+                    <div className="relative flex min-w-[280px] flex-col gap-2">
                       <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">批量参考图</span>
                       <div className="flex gap-2">
-                        <select
-                          value={batchReferenceId}
-                          onChange={(e) => setBatchReferenceId(e.target.value)}
-                          title={selectedBatchReference ? formatReferenceMention(selectedBatchReference.name) : '选择参考图库图片'}
-                          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 outline-none focus:border-blue-400"
+                        <button
+                          onClick={() => setShowBatchReferencePicker(prev => !prev)}
+                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-left text-xs font-black outline-none transition-all ${
+                            selectedBatchReference
+                              ? 'border-blue-400 bg-white text-blue-700 shadow-sm'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300'
+                          }`}
                         >
-                          <option value="">选择参考图库图片</option>
-                          {settings.referenceLibrary.map(reference => (
-                            <option key={reference.id} value={reference.id}>
-                              {formatReferenceMention(reference.name)}
-                            </option>
-                          ))}
-                        </select>
-                        <button onClick={() => handleBatchReferenceApply('append')} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-black text-blue-700 hover:bg-blue-100">插入</button>
-                        <button onClick={() => handleBatchReferenceApply('replace')} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-700 hover:bg-amber-100">替换</button>
+                          <i className="fa-solid fa-images mr-2 text-blue-600"></i>
+                          {selectedBatchReference ? formatReferenceMention(selectedBatchReference.name) : '选择参考图'}
+                        </button>
+                        <button
+                          onClick={handleBatchReferenceClear}
+                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black text-slate-600 hover:bg-slate-50"
+                        >
+                          清除
+                        </button>
                       </div>
+                      {showBatchReferencePicker && (
+                        <div className="absolute left-0 top-[66px] z-40 w-[420px] max-w-[calc(100vw-3rem)] overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-2xl shadow-blue-950/15">
+                          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">选择后直接加入提示词</span>
+                            <button onClick={() => setShowBatchReferencePicker(false)} className="text-slate-300 hover:text-slate-600">
+                              <i className="fa-solid fa-xmark"></i>
+                            </button>
+                          </div>
+                          {settings.referenceLibrary.length === 0 ? (
+                            <div className="p-6 text-center text-xs font-black text-slate-400">参考图库为空</div>
+                          ) : (
+                            <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto p-3">
+                              {settings.referenceLibrary.map(reference => {
+                                const isActive = batchReferenceId === reference.id;
+                                return (
+                                  <button
+                                    key={reference.id}
+                                    onClick={() => handleBatchReferenceToggle(reference)}
+                                    className={`group overflow-hidden rounded-xl border text-left transition-all ${
+                                      isActive
+                                        ? 'border-blue-600 bg-blue-50 shadow-lg shadow-blue-500/20'
+                                        : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/50'
+                                    }`}
+                                    title={formatReferenceMention(reference.name)}
+                                  >
+                                    <div className="relative aspect-square bg-slate-100">
+                                      <img src={reference.imageData} alt={reference.name} className="h-full w-full object-cover" />
+                                      {isActive && (
+                                        <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg">
+                                          <i className="fa-solid fa-check text-[10px]"></i>
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="truncate px-2 py-2 text-[10px] font-black text-slate-700">
+                                      {formatReferenceMention(reference.name)}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="ml-auto flex items-end gap-2">
