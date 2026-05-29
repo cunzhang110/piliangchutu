@@ -422,10 +422,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({
             </button>
           </div>
           <button
-            disabled={isProcessing || !task.prompt}
+            disabled={isProcessing}
             onClick={() => onGenerate(task.id)}
-            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
-              task.status === TaskStatus.COMPLETED
+            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+              isProcessing
+                ? 'bg-slate-200 text-slate-400'
+                : task.status === TaskStatus.COMPLETED
                 ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                 : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}

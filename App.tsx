@@ -734,6 +734,16 @@ const App: React.FC = () => {
   const runSingleTask = async (task: GenerationTask) => {
     if (stopRef.current || pausedRef.current) return;
     const providerLabel = getProviderLabel(settings.activeProvider);
+    if (!task.prompt.trim()) {
+      updateTaskState(task.id, currentTask => ({
+        ...currentTask,
+        status: TaskStatus.FAILED,
+        statusMessage: '缺少提示词',
+        error: '请先输入提示词，或在批量参考图里选择参考图后再开始。'
+      }));
+      showToast('请先输入提示词，或选择参考图后再开始', 'error');
+      return;
+    }
 
     const aspectRatioValidationMessage = getAspectRatioValidationMessage(task.config.aspectRatio);
     if (aspectRatioValidationMessage) {

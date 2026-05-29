@@ -272,10 +272,20 @@ const requestJson = async <T>(provider: ServiceProvider, path: string, init: Req
 
       const rawText = await response.text();
       const payload = parsePayload(rawText);
+      const errorMessage = getErrorMessage(payload, `请求失败 (${response.status})`);
 
       if (response.ok) {
         requestSlotStates[provider].lastRequestCompletedAt = Date.now();
         return (payload || {}) as T;
+      }
+
+      if (
+        response.status === 401
+        || errorMessage.includes("API_KEY_INVALID")
+        || errorMessage.includes("无效令牌")
+        || errorMessage.toLowerCase().includes("invalid token")
+      ) {
+        throw createError("API_KEY_EXPIRED", response.status);
       }
 
       if (response.status === 429 && attempt < providerConfig.maxRateLimitRetries) {
@@ -289,7 +299,7 @@ const requestJson = async <T>(provider: ServiceProvider, path: string, init: Req
         continue;
       }
 
-      throw createError(getErrorMessage(payload, `请求失败 (${response.status})`), response.status);
+      throw createError(errorMessage, response.status);
     }
 
     throw createError("API 频率达到上限 (429)，请稍后再试。", 429);
