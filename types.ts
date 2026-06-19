@@ -11,7 +11,7 @@ export enum TaskStatus {
 export type AspectRatio = string;
 export type ImageSize = "1K" | "2K" | "4K";
 export type AntiAILevel = "off" | "low" | "medium" | "high";
-export type ServiceProvider = "yunwu" | "apimart";
+export type ServiceProvider = "yunwu" | "apimart" | "muzhi";
 
 export interface ReferenceImageItem {
   id: string;
@@ -46,6 +46,8 @@ export interface AppSettings {
   yunwuTextModel: string;
   apimartImageModel: string;
   apimartTextModel: string;
+  muzhiImageModel: string;
+  muzhiTextModel: string;
   defaultAspectRatio: AspectRatio;
   defaultImageSize: ImageSize;
   globalReferenceImage?: string;

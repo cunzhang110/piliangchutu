@@ -295,7 +295,7 @@ export const getYunwuResolutionSummary = (modelName: string, aspectRatio: Aspect
 
   if (apimartFamily === "gpt-image-2" || apimartFamily === "gpt-image-2-official") {
     return imageSize === "4K"
-      ? `当前模型在 APIMart 下最高只到 2K，已自动按 2K 处理，比例 ${normalizedRatio} 约为 ${resolutionLabel}`
+      ? `当前模型最高只到 2K，已自动按 2K 处理，比例 ${normalizedRatio} 约为 ${resolutionLabel}`
       : `当前比例 ${normalizedRatio} / ${imageSize} 约为 ${resolutionLabel}`;
   }
 

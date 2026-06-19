@@ -7,7 +7,8 @@ const REALISTIC_PROMPT_SUFFIX = "shot on iPhone 14 Pro, amateur photography, nat
 
 const PROVIDER_LABELS: Record<ServiceProvider, string> = {
   yunwu: "云雾API",
-  apimart: "APIMart"
+  apimart: "APIMart",
+  muzhi: "Muzhi"
 };
 
 const YUNWU_BASE_URL = (import.meta.env.VITE_YUNWU_BASE_URL || "https://yunwu.ai").replace(/\/$/, "");
@@ -29,6 +30,17 @@ const APIMART_MAX_RATE_LIMIT_RETRIES = Number(import.meta.env.VITE_APIMART_MAX_R
 const APIMART_RATE_LIMIT_COOLDOWN_MS = Number(import.meta.env.VITE_APIMART_RATE_LIMIT_COOLDOWN_MS || 30000);
 const APIMART_TASK_POLL_INTERVAL_MS = Number(import.meta.env.VITE_APIMART_TASK_POLL_INTERVAL_MS || 2500);
 const APIMART_TASK_POLL_TIMEOUT_MS = Number(import.meta.env.VITE_APIMART_TASK_POLL_TIMEOUT_MS || 120000);
+
+const MUZHI_BASE_URL = (import.meta.env.VITE_MUZHI_BASE_URL || "https://api.muzhi.ai").replace(/\/$/, "");
+const MUZHI_DEFAULT_API_KEY = import.meta.env.VITE_MUZHI_API_KEY?.trim() || "";
+const MUZHI_DEFAULT_IMAGE_MODEL = import.meta.env.VITE_MUZHI_IMAGE_MODEL?.trim() || "gpt-image-2";
+const MUZHI_DEFAULT_TEXT_MODEL = import.meta.env.VITE_MUZHI_TEXT_MODEL?.trim() || "gemini-2.5-pro";
+const MUZHI_ENABLE_PROMPT_REWRITE = (import.meta.env.VITE_MUZHI_ENABLE_PROMPT_REWRITE || "false") === "true";
+const MUZHI_MIN_REQUEST_INTERVAL_MS = Number(import.meta.env.VITE_MUZHI_MIN_REQUEST_INTERVAL_MS || 5000);
+const MUZHI_MAX_RATE_LIMIT_RETRIES = Number(import.meta.env.VITE_MUZHI_MAX_RATE_LIMIT_RETRIES || 4);
+const MUZHI_RATE_LIMIT_COOLDOWN_MS = Number(import.meta.env.VITE_MUZHI_RATE_LIMIT_COOLDOWN_MS || 30000);
+const MUZHI_TASK_POLL_INTERVAL_MS = Number(import.meta.env.VITE_MUZHI_TASK_POLL_INTERVAL_MS || 2500);
+const MUZHI_TASK_POLL_TIMEOUT_MS = Number(import.meta.env.VITE_MUZHI_TASK_POLL_TIMEOUT_MS || 120000);
 
 type GeminiNativeResponse = {
   candidates?: Array<{
@@ -138,6 +150,11 @@ const requestSlotStates: Record<ServiceProvider, RequestSlotState> = {
     queue: Promise.resolve(),
     lastRequestCompletedAt: 0,
     nextAllowedRequestAt: 0
+  },
+  muzhi: {
+    queue: Promise.resolve(),
+    lastRequestCompletedAt: 0,
+    nextAllowedRequestAt: 0
   }
 };
 
@@ -164,6 +181,20 @@ const getProviderConfig = (provider: ServiceProvider) => {
     };
   }
 
+  if (provider === "muzhi") {
+    return {
+      label: PROVIDER_LABELS.muzhi,
+      baseUrl: MUZHI_BASE_URL,
+      defaultApiKey: MUZHI_DEFAULT_API_KEY,
+      defaultImageModel: MUZHI_DEFAULT_IMAGE_MODEL,
+      defaultTextModel: MUZHI_DEFAULT_TEXT_MODEL,
+      enablePromptRewrite: MUZHI_ENABLE_PROMPT_REWRITE,
+      minRequestIntervalMs: MUZHI_MIN_REQUEST_INTERVAL_MS,
+      maxRateLimitRetries: MUZHI_MAX_RATE_LIMIT_RETRIES,
+      rateLimitCooldownMs: MUZHI_RATE_LIMIT_COOLDOWN_MS
+    };
+  }
+
   return {
     label: PROVIDER_LABELS.yunwu,
     baseUrl: YUNWU_BASE_URL,
@@ -174,6 +205,20 @@ const getProviderConfig = (provider: ServiceProvider) => {
     minRequestIntervalMs: YUNWU_MIN_REQUEST_INTERVAL_MS,
     maxRateLimitRetries: YUNWU_MAX_RATE_LIMIT_RETRIES,
     rateLimitCooldownMs: YUNWU_RATE_LIMIT_COOLDOWN_MS
+  };
+};
+
+const getTaskPollConfig = (provider: ServiceProvider) => {
+  if (provider === "muzhi") {
+    return {
+      intervalMs: MUZHI_TASK_POLL_INTERVAL_MS,
+      timeoutMs: MUZHI_TASK_POLL_TIMEOUT_MS
+    };
+  }
+
+  return {
+    intervalMs: APIMART_TASK_POLL_INTERVAL_MS,
+    timeoutMs: APIMART_TASK_POLL_TIMEOUT_MS
   };
 };
 
@@ -391,19 +436,20 @@ const buildAPIMartReferenceImageUrls = (referenceImages: ReferenceImageItem[], p
 const fetchImageAsDataUrl = async (imageUrl: string) => {
   const response = await fetch(imageUrl);
   if (!response.ok) {
-    throw createError(`下载 APIMart 结果图片失败 (${response.status})`);
+    throw createError(`下载结果图片失败 (${response.status})`);
   }
 
   const blob = await response.blob();
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(createError("APIMart 结果图片转码失败"));
+    reader.onerror = () => reject(createError("结果图片转码失败"));
     reader.readAsDataURL(blob);
   });
 };
 
-const createAPIMartImageTask = async (
+const createOpenAICompatibleImageTask = async (
+  provider: ServiceProvider,
   prompt: string,
   aspectRatio: AspectRatio,
   imageSize: ImageSize,
@@ -436,7 +482,7 @@ const createAPIMartImageTask = async (
     payload.return_base64 = false;
   }
 
-  const response = await requestJson<APIMartImageTaskCreateResponse>( "apimart", "/v1/images/generations", {
+  const response = await requestJson<APIMartImageTaskCreateResponse>(provider, "/v1/images/generations", {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -445,17 +491,19 @@ const createAPIMartImageTask = async (
     || response.id
     || (Array.isArray(response.data) ? response.data[0]?.task_id || response.data[0]?.id : response.data?.task_id || response.data?.id);
   if (!taskId) {
-    throw createError("APIMart 已接收请求，但没有返回任务 ID。");
+    throw createError(`${getProviderConfig(provider).label} 已接收请求，但没有返回任务 ID。`);
   }
 
   return taskId;
 };
 
-const pollAPIMartImageTask = async (taskId: string) => {
+const pollOpenAICompatibleImageTask = async (provider: ServiceProvider, taskId: string) => {
   const startedAt = Date.now();
+  const pollConfig = getTaskPollConfig(provider);
+  const providerLabel = getProviderConfig(provider).label;
 
-  while (Date.now() - startedAt < APIMART_TASK_POLL_TIMEOUT_MS) {
-    const response = await requestJson<APIMartTaskStatusResponse>("apimart", `/v1/tasks/${encodeURIComponent(taskId)}?language=zh`, {
+  while (Date.now() - startedAt < pollConfig.timeoutMs) {
+    const response = await requestJson<APIMartTaskStatusResponse>(provider, `/v1/tasks/${encodeURIComponent(taskId)}?language=zh`, {
       method: "GET"
     });
 
@@ -471,13 +519,13 @@ const pollAPIMartImageTask = async (taskId: string) => {
     }
 
     if (["failed", "error", "cancelled"].includes(normalizedStatus)) {
-      throw createError(response.error?.message || response.message || "APIMart 任务执行失败。");
+      throw createError(response.error?.message || response.message || `${providerLabel} 任务执行失败。`);
     }
 
-    await sleep(APIMART_TASK_POLL_INTERVAL_MS);
+    await sleep(pollConfig.intervalMs);
   }
 
-  throw createError("APIMart 任务轮询超时，请稍后重试。");
+  throw createError(`${providerLabel} 任务轮询超时，请稍后重试。`);
 };
 
 export const getProviderLabel = (provider: ServiceProvider) => PROVIDER_LABELS[provider];
@@ -503,8 +551,8 @@ export const preparePromptForImage = async (
   const textModel = textModelOverride?.trim() || providerConfig.defaultTextModel;
 
   try {
-    if (provider === "apimart") {
-      const response = await requestJson<OpenAICompatResponse>("apimart", "/api/v1/chat/completions", {
+    if (provider === "apimart" || provider === "muzhi") {
+      const response = await requestJson<OpenAICompatResponse>(provider, "/api/v1/chat/completions", {
         method: "POST",
         body: JSON.stringify({
           model: textModel,
@@ -571,8 +619,9 @@ export const generateImage = async (
   const imageModel = imageModelOverride?.trim() || providerConfig.defaultImageModel;
 
   try {
-    if (provider === "apimart") {
-      const taskId = await createAPIMartImageTask(
+    if (provider === "apimart" || provider === "muzhi") {
+      const taskId = await createOpenAICompatibleImageTask(
+        provider,
         prompt,
         aspectRatio,
         imageSize,
@@ -580,7 +629,7 @@ export const generateImage = async (
         referenceImages,
         referencePrompt
       );
-      const imageUrl = await pollAPIMartImageTask(taskId);
+      const imageUrl = await pollOpenAICompatibleImageTask(provider, taskId);
       return await fetchImageAsDataUrl(imageUrl);
     }
 
@@ -641,8 +690,8 @@ export const generateImage = async (
       throw createError(`${providerConfig.label} 当前账号下模型 ${imageModel} 没有可用通道。请到后台检查该模型是否已开通，或改用供应商给你的可用模型名。`);
     }
 
-    if (provider === "apimart" && (message.includes("all channels failed") || message.includes("Multi-channel task failure"))) {
-      throw createError(`APIMart 的 ${imageModel} 当前多通道执行失败。建议优先改用 gpt-image-2-official，或稍后重试。原始反馈：${message}`);
+    if ((provider === "apimart" || provider === "muzhi") && (message.includes("all channels failed") || message.includes("Multi-channel task failure"))) {
+      throw createError(`${providerConfig.label} 的 ${imageModel} 当前多通道执行失败。请稍后重试，或检查该模型在服务商后台是否可用。原始反馈：${message}`);
     }
 
     throw serviceError;

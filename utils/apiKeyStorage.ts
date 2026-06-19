@@ -2,7 +2,8 @@ import type { ServiceProvider } from "../types";
 
 const STORAGE_KEYS: Record<ServiceProvider, string> = {
   yunwu: "yunwu_api_key",
-  apimart: "apimart_api_key"
+  apimart: "apimart_api_key",
+  muzhi: "muzhi_api_key"
 };
 
 const canUseStorage = () => typeof window !== "undefined" && typeof window.localStorage !== "undefined";

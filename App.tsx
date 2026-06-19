@@ -15,9 +15,27 @@ const LEGACY_YUNWU_IMAGE_MODEL = 'gemini-3-pro-image-preview';
 const DEFAULT_PROVIDER: ServiceProvider = 'yunwu';
 const FIXED_PROVIDER_IMAGE_MODELS: Record<ServiceProvider, string> = {
   yunwu: 'gemini-3.1-flash-image-preview',
-  apimart: 'gpt-image-2'
+  apimart: 'gpt-image-2',
+  muzhi: 'gpt-image-2'
 };
-const MODEL_SLOGAN = '云雾用香蕉模型，APIMart 用 GPT-2 模型';
+const MODEL_SLOGAN = '云雾用香蕉模型，APIMart 和 Muzhi 用 GPT-2 模型';
+const SERVICE_PROVIDER_OPTIONS: Array<{ value: ServiceProvider; label: string; shortLabel: string }> = [
+  { value: 'yunwu', label: '云雾API', shortLabel: '云雾' },
+  { value: 'apimart', label: 'APIMart', shortLabel: 'APIMart' },
+  { value: 'muzhi', label: 'Muzhi', shortLabel: 'Muzhi' }
+];
+
+const getProviderTextModel = (settings: AppSettings, provider: ServiceProvider) => {
+  if (provider === 'apimart') return settings.apimartTextModel;
+  if (provider === 'muzhi') return settings.muzhiTextModel;
+  return settings.yunwuTextModel;
+};
+
+const getProviderTextModelKey = (provider: ServiceProvider): keyof Pick<AppSettings, 'yunwuTextModel' | 'apimartTextModel' | 'muzhiTextModel'> => {
+  if (provider === 'apimart') return 'apimartTextModel';
+  if (provider === 'muzhi') return 'muzhiTextModel';
+  return 'yunwuTextModel';
+};
 
 type ExternalImageJob = {
   id: string;
@@ -159,19 +177,26 @@ const normalizeTask = (task: any): GenerationTask => {
 const normalizeLoadedSettings = (rawSettings: any): Partial<AppSettings> => {
   const defaultYunwuTextModel = getDefaultTextModel('yunwu');
   const defaultAPIMartTextModel = getDefaultTextModel('apimart');
+  const defaultMuzhiTextModel = getDefaultTextModel('muzhi');
 
   const rawYunwuTextModel = rawSettings?.yunwuTextModel || rawSettings?.providerTextModels?.yunwu || defaultYunwuTextModel;
   const rawAPIMartTextModel = rawSettings?.apimartTextModel || rawSettings?.providerTextModels?.apimart || defaultAPIMartTextModel;
+  const rawMuzhiTextModel = rawSettings?.muzhiTextModel || rawSettings?.providerTextModels?.muzhi || defaultMuzhiTextModel;
+  const activeProvider = SERVICE_PROVIDER_OPTIONS.some(provider => provider.value === rawSettings?.activeProvider)
+    ? rawSettings.activeProvider as ServiceProvider
+    : DEFAULT_PROVIDER;
 
   return {
     ...rawSettings,
-    activeProvider: rawSettings?.activeProvider === 'apimart' ? 'apimart' : DEFAULT_PROVIDER,
+    activeProvider,
     referenceLibrary: normalizeReferenceLibrary(rawSettings?.referenceLibrary),
     defaultAspectRatio: normalizeAspectRatio(rawSettings?.defaultAspectRatio || "1:1"),
     yunwuImageModel: FIXED_PROVIDER_IMAGE_MODELS.yunwu,
     yunwuTextModel: rawYunwuTextModel || defaultYunwuTextModel,
     apimartImageModel: FIXED_PROVIDER_IMAGE_MODELS.apimart,
-    apimartTextModel: rawAPIMartTextModel || defaultAPIMartTextModel
+    apimartTextModel: rawAPIMartTextModel || defaultAPIMartTextModel,
+    muzhiImageModel: FIXED_PROVIDER_IMAGE_MODELS.muzhi,
+    muzhiTextModel: rawMuzhiTextModel || defaultMuzhiTextModel
   };
 };
 
@@ -188,6 +213,8 @@ const App: React.FC = () => {
     yunwuTextModel: getDefaultTextModel('yunwu'),
     apimartImageModel: FIXED_PROVIDER_IMAGE_MODELS.apimart,
     apimartTextModel: getDefaultTextModel('apimart'),
+    muzhiImageModel: FIXED_PROVIDER_IMAGE_MODELS.muzhi,
+    muzhiTextModel: getDefaultTextModel('muzhi'),
     defaultAspectRatio: "1:1",
     defaultImageSize: "1K",
     referenceLibrary: [],
@@ -781,7 +808,7 @@ const App: React.FC = () => {
         task.prompt,
         settings.forceRealisticPrompt,
         settings.activeProvider,
-        settings.activeProvider === 'apimart' ? settings.apimartTextModel : settings.yunwuTextModel
+        getProviderTextModel(settings, settings.activeProvider)
       );
 
       updateTaskState(task.id, currentTask => ({
@@ -924,9 +951,7 @@ const App: React.FC = () => {
   const selectedCount = tasks.filter(t => t.selected).length;
   const providerLabel = getProviderLabel(settings.activeProvider);
   const activeImageModel = FIXED_PROVIDER_IMAGE_MODELS[settings.activeProvider];
-  const activeTextModel = settings.activeProvider === 'apimart'
-    ? (settings.apimartTextModel || getDefaultTextModel('apimart'))
-    : (settings.yunwuTextModel || getDefaultTextModel('yunwu'));
+  const activeTextModel = getProviderTextModel(settings, settings.activeProvider) || getDefaultTextModel(settings.activeProvider);
   const selectedBatchReference = settings.referenceLibrary.find(reference => reference.id === batchReferenceId);
   const supportedAspectRatios = getSupportedYunwuAspectRatios(activeImageModel);
   const supportedImageSizes = getSupportedYunwuImageSizes(activeImageModel);
@@ -957,12 +982,9 @@ const App: React.FC = () => {
               <i className="fa-solid fa-wand-sparkles"></i>
             </div>
             <h1 className="text-2xl font-black text-slate-800 mb-4 tracking-tight">批量生图大师 Pro</h1>
-            <p className="text-slate-500 text-sm mb-4 leading-relaxed">当前可切换 <b>云雾API</b> 和 <b>APIMart</b>。在这里填写当前服务商的 API Key 后会自动保存在当前浏览器。</p>
+            <p className="text-slate-500 text-sm mb-4 leading-relaxed">当前可切换 <b>云雾API</b>、<b>APIMart</b> 和 <b>Muzhi</b>。在这里填写当前服务商的 API Key 后会自动保存在当前浏览器。</p>
             <div className="flex justify-center gap-2 mb-5">
-              {([
-                { value: 'yunwu', label: '云雾API' },
-                { value: 'apimart', label: 'APIMart' }
-              ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+              {SERVICE_PROVIDER_OPTIONS.map(provider => (
                 <button
                   key={provider.value}
                   onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
@@ -1002,9 +1024,9 @@ const App: React.FC = () => {
                 value={activeTextModel}
                 onChange={(e) => setSettings(prev => ({
                   ...prev,
-                  [settings.activeProvider === 'apimart' ? 'apimartTextModel' : 'yunwuTextModel']: e.target.value
+                  [getProviderTextModelKey(settings.activeProvider)]: e.target.value
                 }))}
-                placeholder={settings.activeProvider === 'apimart' ? '例如 gemini-2.5-pro' : '例如 gemini-3-pro-preview'}
+                placeholder={settings.activeProvider === 'yunwu' ? '例如 gemini-3-pro-preview' : '例如 gemini-2.5-pro'}
                 className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm font-medium outline-none focus:border-blue-400"
               />
             </div>
@@ -1055,10 +1077,7 @@ const App: React.FC = () => {
         </div>
         <div className="flex gap-2">
           <div className="flex rounded-xl border border-slate-200 bg-white p-1">
-            {([
-              { value: 'yunwu', label: '云雾' },
-              { value: 'apimart', label: 'APIMart' }
-            ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+            {SERVICE_PROVIDER_OPTIONS.map(provider => (
               <button
                 key={provider.value}
                 onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
@@ -1068,7 +1087,7 @@ const App: React.FC = () => {
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {provider.label}
+                {provider.shortLabel}
               </button>
             ))}
           </div>
@@ -1116,7 +1135,7 @@ const App: React.FC = () => {
 
         <div className="md:col-span-3 flex flex-col gap-1.5">
           <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-            {supportsExplicitImageSize ? '云雾分辨率' : '云雾原生分辨率'}
+            {supportsExplicitImageSize ? '输出分辨率' : '原生分辨率'}
           </span>
           <div className={`grid gap-2 ${supportsExplicitImageSize ? 'grid-cols-3' : 'grid-cols-1'}`}>
             {supportedImageSizes.map(sz => {
@@ -1528,10 +1547,7 @@ const App: React.FC = () => {
             </div>
             <div className="p-6">
               <div className="flex gap-2 mb-4">
-                {([
-                  { value: 'yunwu', label: '云雾API' },
-                  { value: 'apimart', label: 'APIMart' }
-                ] as Array<{ value: ServiceProvider; label: string }>).map(provider => (
+                {SERVICE_PROVIDER_OPTIONS.map(provider => (
                   <button
                     key={provider.value}
                     onClick={() => setSettings(prev => ({ ...prev, activeProvider: provider.value }))}
@@ -1569,7 +1585,7 @@ const App: React.FC = () => {
               <p className="text-[11px] text-amber-600 mt-3 leading-relaxed">
                 {settings.activeProvider === 'yunwu'
                   ? '云雾当前固定使用 gemini-3.1-flash-image-preview，也就是香蕉模型。'
-                  : 'APIMart 当前固定使用 gpt-image-2 模型。'}
+                  : `${providerLabel} 当前固定使用 gpt-image-2 模型。`}
               </p>
             </div>
             <div className="p-6 bg-slate-50/80 border-t border-slate-100 flex gap-3">
