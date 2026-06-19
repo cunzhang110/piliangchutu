@@ -49,8 +49,9 @@ npm run dev
 - `VITE_APIMART_RATE_LIMIT_COOLDOWN_MS`: APIMart 命中 429 后的全局冷却时长，默认 `30000`
 - `VITE_APIMART_TASK_POLL_INTERVAL_MS`: APIMart 生图任务轮询间隔，默认 `2500`
 - `VITE_APIMART_TASK_POLL_TIMEOUT_MS`: APIMart 生图任务轮询超时时间，默认 `120000`
-- `VITE_MUZHI_API_KEY`: Muzhi API Key
-- `VITE_MUZHI_BASE_URL`: Muzhi 接口基础地址，默认 `https://api.muzhi.ai`
+- `MUZHI_API_KEY`: Muzhi 服务端 API Key，仅供 Vercel `/api/muzhi` 代理使用，不会打进前端包
+- `MUZHI_BASE_URL`: Muzhi 服务端接口基础地址，默认 `https://api.muzhi.ai`
+- `VITE_MUZHI_BASE_URL`: Muzhi 前端请求地址，默认 `/api/muzhi`
 - `VITE_MUZHI_IMAGE_MODEL`: Muzhi 默认图像模型，默认 `gpt-image-2`
 - `VITE_MUZHI_TEXT_MODEL`: Muzhi 默认文本模型，默认 `gemini-2.5-pro`
 - `VITE_MUZHI_ENABLE_PROMPT_REWRITE`: Muzhi 是否启用提示词增强，默认 `false`

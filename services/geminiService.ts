@@ -31,7 +31,7 @@ const APIMART_RATE_LIMIT_COOLDOWN_MS = Number(import.meta.env.VITE_APIMART_RATE_
 const APIMART_TASK_POLL_INTERVAL_MS = Number(import.meta.env.VITE_APIMART_TASK_POLL_INTERVAL_MS || 2500);
 const APIMART_TASK_POLL_TIMEOUT_MS = Number(import.meta.env.VITE_APIMART_TASK_POLL_TIMEOUT_MS || 120000);
 
-const MUZHI_BASE_URL = (import.meta.env.VITE_MUZHI_BASE_URL || "https://api.muzhi.ai").replace(/\/$/, "");
+const MUZHI_BASE_URL = (import.meta.env.VITE_MUZHI_BASE_URL || "/api/muzhi").replace(/\/$/, "");
 const MUZHI_DEFAULT_API_KEY = import.meta.env.VITE_MUZHI_API_KEY?.trim() || "";
 const MUZHI_DEFAULT_IMAGE_MODEL = import.meta.env.VITE_MUZHI_IMAGE_MODEL?.trim() || "gpt-image-2";
 const MUZHI_DEFAULT_TEXT_MODEL = import.meta.env.VITE_MUZHI_TEXT_MODEL?.trim() || "gemini-2.5-pro";
@@ -294,7 +294,8 @@ const getRetryDelayMs = (provider: ServiceProvider, response: Response, attempt:
 const requestJson = async <T>(provider: ServiceProvider, path: string, init: RequestInit): Promise<T> => {
   const providerConfig = getProviderConfig(provider);
   const apiKey = getApiKey(provider);
-  if (!apiKey) {
+  const usesServerProxy = provider === "muzhi" && providerConfig.baseUrl.startsWith("/api/");
+  if (!apiKey && !usesServerProxy) {
     throw createError("API_KEY_MISSING");
   }
 
@@ -306,7 +307,7 @@ const requestJson = async <T>(provider: ServiceProvider, path: string, init: Req
         response = await fetch(`${providerConfig.baseUrl}${path}`, {
           ...init,
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            ...(apiKey && !usesServerProxy ? { Authorization: `Bearer ${apiKey}` } : {}),
             "Content-Type": "application/json",
             ...(init.headers || {})
           }
