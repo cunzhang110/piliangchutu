@@ -6,6 +6,12 @@ const readBody = (request) => new Promise((resolve, reject) => {
 });
 
 export default async function handler(request, response) {
+  if (request.method !== "POST") {
+    response.setHeader("Allow", "POST");
+    response.status(405).json({ error: { message: "Method not allowed." } });
+    return;
+  }
+
   const apiKey = process.env.MUZHI_API_KEY;
   if (!apiKey) {
     response.status(500).json({ error: { message: "Muzhi API Key is not configured on the server." } });
@@ -13,27 +19,11 @@ export default async function handler(request, response) {
   }
 
   const baseUrl = (process.env.MUZHI_BASE_URL || "https://api.muzhi.ai").replace(/\/$/, "");
-  const rawPath = request.query.path;
-  const path = Array.isArray(rawPath) ? rawPath.join("/") : rawPath || "";
-  const searchParams = new URLSearchParams();
-
-  Object.entries(request.query || {}).forEach(([key, value]) => {
-    if (key === "path") return;
-    if (Array.isArray(value)) {
-      value.forEach(item => searchParams.append(key, item));
-      return;
-    }
-    if (typeof value === "string") {
-      searchParams.set(key, value);
-    }
-  });
-
-  const targetUrl = `${baseUrl}/${path}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-  const body = ["GET", "HEAD"].includes(request.method || "GET") ? undefined : await readBody(request);
+  const body = await readBody(request);
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: request.method,
+    const upstream = await fetch(`${baseUrl}/v1/images/generations`, {
+      method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": request.headers["content-type"] || "application/json"
