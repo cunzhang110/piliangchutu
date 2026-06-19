@@ -37,6 +37,8 @@ export default async function handler(request, response) {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
+        "x-api-key": apiKey,
+        "x-goog-api-key": apiKey,
         "Content-Type": "application/json"
       }
     });
