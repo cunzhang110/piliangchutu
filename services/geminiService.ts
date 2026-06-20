@@ -1,7 +1,7 @@
 import { AspectRatio, ImageSize, ReferenceImageItem, ServiceProvider } from "../types";
 import { getStoredApiKey } from "../utils/apiKeyStorage";
 import { extractMentionNames } from "../utils/referenceMentions";
-import { getYunwuImageConfig } from "../utils/yunwuImageCapabilities";
+import { getYunwuImageConfig, getYunwuResolutionLabel } from "../utils/yunwuImageCapabilities";
 
 const REALISTIC_PROMPT_SUFFIX = "shot on iPhone 14 Pro, amateur photography, natural lighting, unedited, casual snapshot, slight motion blur, raw photo";
 
@@ -132,6 +132,25 @@ type APIMartTaskStatusResponse = {
     message?: string;
   };
   message?: string;
+};
+
+type MuzhiImageGenerationResponse = APIMartImageTaskCreateResponse & {
+  data?: Array<{
+    url?: string;
+    b64_json?: string;
+    image_url?: string;
+    task_id?: string;
+    id?: string;
+  }> | {
+    url?: string;
+    b64_json?: string;
+    image_url?: string;
+    task_id?: string;
+    id?: string;
+  };
+  url?: string;
+  image_url?: string;
+  b64_json?: string;
 };
 
 type RequestSlotState = {
@@ -449,6 +468,70 @@ const fetchImageAsDataUrl = async (imageUrl: string) => {
   });
 };
 
+const normalizeResolutionSize = (resolutionLabel: string | null) => {
+  return resolutionLabel?.replace(/\s*x\s*/i, "x").trim() || "";
+};
+
+const getMuzhiImageSize = (imageModel: string, aspectRatio: AspectRatio, imageSize: ImageSize) => {
+  return normalizeResolutionSize(getYunwuResolutionLabel(imageModel, aspectRatio, imageSize)) || "1024x1024";
+};
+
+const extractDirectImageUrl = (response: MuzhiImageGenerationResponse) => {
+  const firstDataItem = (Array.isArray(response.data) ? response.data[0] : response.data) as Record<string, unknown> | undefined;
+  return response.url || response.image_url || String(firstDataItem?.url || firstDataItem?.image_url || "");
+};
+
+const extractDirectImageBase64 = (response: MuzhiImageGenerationResponse) => {
+  const firstDataItem = (Array.isArray(response.data) ? response.data[0] : response.data) as Record<string, unknown> | undefined;
+  return response.b64_json || String(firstDataItem?.b64_json || "");
+};
+
+const generateMuzhiImage = async (
+  prompt: string,
+  aspectRatio: AspectRatio,
+  imageSize: ImageSize,
+  imageModel: string,
+  referenceImages?: ReferenceImageItem[],
+  referencePrompt?: string
+) => {
+  const imageUrls = buildAPIMartReferenceImageUrls(referenceImages || [], referencePrompt || prompt);
+  const payload: Record<string, unknown> = {
+    model: imageModel,
+    prompt,
+    size: getMuzhiImageSize(imageModel, aspectRatio, imageSize),
+    n: 1
+  };
+
+  if (imageUrls.length > 0) {
+    payload.image_urls = imageUrls;
+  }
+
+  const response = await requestJson<MuzhiImageGenerationResponse>("muzhi", "/v1/images/generations", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  const imageBase64 = extractDirectImageBase64(response);
+  if (imageBase64) {
+    return imageBase64.startsWith("data:") ? imageBase64 : `data:image/png;base64,${imageBase64}`;
+  }
+
+  const imageUrl = extractDirectImageUrl(response);
+  if (imageUrl) {
+    return await fetchImageAsDataUrl(imageUrl);
+  }
+
+  const taskId = response.task_id
+    || response.id
+    || (Array.isArray(response.data) ? response.data[0]?.task_id || response.data[0]?.id : response.data?.task_id || response.data?.id);
+  if (taskId) {
+    const polledImageUrl = await pollOpenAICompatibleImageTask("muzhi", taskId);
+    return await fetchImageAsDataUrl(polledImageUrl);
+  }
+
+  throw createError("Muzhi 已接收请求，但没有返回图片或任务 ID。");
+};
+
 const createOpenAICompatibleImageTask = async (
   provider: ServiceProvider,
   prompt: string,
@@ -620,7 +703,18 @@ export const generateImage = async (
   const imageModel = imageModelOverride?.trim() || providerConfig.defaultImageModel;
 
   try {
-    if (provider === "apimart" || provider === "muzhi") {
+    if (provider === "muzhi") {
+      return await generateMuzhiImage(
+        prompt,
+        aspectRatio,
+        imageSize,
+        imageModel,
+        referenceImages,
+        referencePrompt
+      );
+    }
+
+    if (provider === "apimart") {
       const taskId = await createOpenAICompatibleImageTask(
         provider,
         prompt,
