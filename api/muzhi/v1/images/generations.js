@@ -18,11 +18,11 @@ export default async function handler(request, response) {
     return;
   }
 
-  const baseUrl = (process.env.MUZHI_BASE_URL || "https://api.muzhi.ai").replace(/\/$/, "");
+  const generationsUrl = process.env.MUZHI_GENERATIONS_URL || "https://api.muzhi.ai/v1/images/generations";
   const body = await readBody(request);
 
   try {
-    const upstream = await fetch(`${baseUrl}/v1/images/generations`, {
+    const upstream = await fetch(generationsUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,

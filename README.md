@@ -51,6 +51,7 @@ npm run dev
 - `VITE_APIMART_TASK_POLL_TIMEOUT_MS`: APIMart 生图任务轮询超时时间，默认 `120000`
 - `MUZHI_API_KEY`: Muzhi 服务端 API Key，仅供 Vercel `/api/muzhi` 代理使用，不会打进前端包
 - `MUZHI_BASE_URL`: Muzhi 服务端接口基础地址，默认 `https://api.muzhi.ai`
+- `MUZHI_GENERATIONS_URL`: Muzhi 服务端生图完整地址，默认 `https://api.muzhi.ai/v1/images/generations`
 - `VITE_MUZHI_BASE_URL`: Muzhi 前端请求地址，默认 `/api/muzhi`
 - `VITE_MUZHI_IMAGE_MODEL`: Muzhi 默认图像模型，默认 `gpt-image-2`
 - `VITE_MUZHI_TEXT_MODEL`: Muzhi 默认文本模型，默认 `gemini-2.5-pro`
