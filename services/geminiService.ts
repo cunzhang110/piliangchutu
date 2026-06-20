@@ -1,7 +1,7 @@
 import { AspectRatio, ImageSize, ReferenceImageItem, ServiceProvider } from "../types";
 import { getStoredApiKey } from "../utils/apiKeyStorage";
 import { extractMentionNames } from "../utils/referenceMentions";
-import { getYunwuImageConfig, getYunwuResolutionLabel } from "../utils/yunwuImageCapabilities";
+import { getYunwuImageConfig, normalizeAspectRatio } from "../utils/yunwuImageCapabilities";
 
 const REALISTIC_PROMPT_SUFFIX = "shot on iPhone 14 Pro, amateur photography, natural lighting, unedited, casual snapshot, slight motion blur, raw photo";
 
@@ -468,12 +468,26 @@ const fetchImageAsDataUrl = async (imageUrl: string) => {
   });
 };
 
-const normalizeResolutionSize = (resolutionLabel: string | null) => {
-  return resolutionLabel?.replace(/\s*x\s*/i, "x").trim() || "";
+const MUZHI_OPENAI_IMAGE_SIZES: Record<string, string> = {
+  "1:1": "1024x1024",
+  "2:3": "1024x1536",
+  "3:2": "1536x1024",
+  "3:4": "1344x1792",
+  "4:3": "1792x1344",
+  "4:5": "1024x1280",
+  "5:4": "1280x1024",
+  "9:16": "1024x1792",
+  "16:9": "1792x1024",
+  "21:9": "1792x768",
+  "1:4": "512x2048",
+  "4:1": "2048x512",
+  "1:8": "256x2048",
+  "8:1": "2048x256"
 };
 
-const getMuzhiImageSize = (imageModel: string, aspectRatio: AspectRatio, imageSize: ImageSize) => {
-  return normalizeResolutionSize(getYunwuResolutionLabel(imageModel, aspectRatio, imageSize)) || "1024x1024";
+const getMuzhiImageSize = (_imageModel: string, aspectRatio: AspectRatio, _imageSize: ImageSize) => {
+  const normalizedRatio = normalizeAspectRatio(aspectRatio);
+  return MUZHI_OPENAI_IMAGE_SIZES[normalizedRatio] || "1024x1024";
 };
 
 const extractDirectImageUrl = (response: MuzhiImageGenerationResponse) => {

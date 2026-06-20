@@ -26,8 +26,6 @@ export default async function handler(request, response) {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        "x-api-key": apiKey,
-        "x-goog-api-key": apiKey,
         "Content-Type": request.headers["content-type"] || "application/json"
       },
       body
