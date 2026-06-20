@@ -52,6 +52,7 @@ npm run dev
 - `MUZHI_API_KEY`: Muzhi 服务端 API Key，仅供 Vercel `/api/muzhi` 代理使用，不会打进前端包
 - `MUZHI_BASE_URL`: Muzhi 服务端接口基础地址，默认 `https://api.muzhi.ai`
 - `MUZHI_GENERATIONS_URL`: Muzhi 服务端生图完整地址，默认 `https://api.muzhi.ai/v1/images/generations`
+- `MUZHI_EDITS_URL`: Muzhi 服务端参考图编辑完整地址，默认 `https://api.muzhi.ai/v1/images/edits`
 - `VITE_MUZHI_BASE_URL`: Muzhi 前端请求地址，默认 `/api/muzhi`
 - `VITE_MUZHI_IMAGE_MODEL`: Muzhi 默认图像模型，默认 `gpt-image-2`
 - `VITE_MUZHI_TEXT_MODEL`: Muzhi 默认文本模型，默认 `gemini-2.5-pro`
@@ -79,4 +80,5 @@ npm run package:web
 - 如果云雾报“模型无可用渠道”，通常是账号没有为该模型开通通道，不是前端代码错误。
 - APIMart 和 Muzhi 图像模型默认使用 `gpt-image-2`。
 - Muzhi 默认关闭提示词增强，默认情况下只调用 `gpt-image-2` 出图。
+- Muzhi 无参考图时走 `/v1/images/generations`，有 `@参考图` 时走 `/v1/images/edits` multipart 上传参考图。
 - 当前版本已经内置请求排队、最小请求间隔和 429 自动退避重试，适合云雾、APIMart 和 Muzhi 这类限流渠道。

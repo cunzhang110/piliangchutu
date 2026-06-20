@@ -540,11 +540,10 @@ const generateMuzhiImage = async (
   };
 
   if (imageUrls.length > 0) {
-    payload.image_urls = imageUrls;
-    payload.reference_images = imageUrls;
+    payload.images = imageUrls;
   }
 
-  const response = await requestJson<MuzhiImageGenerationResponse>("muzhi", "/v1/images/generations", {
+  const response = await requestJson<MuzhiImageGenerationResponse>("muzhi", imageUrls.length > 0 ? "/v1/images/edits" : "/v1/images/generations", {
     method: "POST",
     body: JSON.stringify(payload)
   });
