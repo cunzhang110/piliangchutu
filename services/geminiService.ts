@@ -1,6 +1,6 @@
 import { AspectRatio, ImageSize, ReferenceImageItem, ServiceProvider } from "../types";
 import { getStoredApiKey } from "../utils/apiKeyStorage";
-import { extractMentionNames } from "../utils/referenceMentions";
+import { extractMentionNames, removeReferenceMentions } from "../utils/referenceMentions";
 import { getYunwuImageConfig, normalizeAspectRatio } from "../utils/yunwuImageCapabilities";
 
 const REALISTIC_PROMPT_SUFFIX = "shot on iPhone 14 Pro, amateur photography, natural lighting, unedited, casual snapshot, slight motion blur, raw photo";
@@ -434,23 +434,27 @@ const buildYunwuReferenceParts = (referenceImages: ReferenceImageItem[], prompt:
   return parts;
 };
 
-const buildAPIMartReferenceImageUrls = (referenceImages: ReferenceImageItem[], prompt: string) => {
+const getReferencedImagesFromPrompt = (referenceImages: ReferenceImageItem[], prompt: string) => {
   if (!referenceImages.length) return [];
   const mentionNames = extractMentionNames(prompt);
   if (mentionNames.length === 0) return [];
 
-  const urls: string[] = [];
+  const orderedReferences: ReferenceImageItem[] = [];
   const seenIds = new Set<string>();
 
   mentionNames.forEach(name => {
     const matchedReference = referenceImages.find(reference => reference.name === name);
     if (matchedReference && !seenIds.has(matchedReference.id)) {
-      urls.push(matchedReference.imageData);
+      orderedReferences.push(matchedReference);
       seenIds.add(matchedReference.id);
     }
   });
 
-  return urls;
+  return orderedReferences;
+};
+
+const buildAPIMartReferenceImageUrls = (referenceImages: ReferenceImageItem[], prompt: string) => {
+  return getReferencedImagesFromPrompt(referenceImages, prompt).map(reference => reference.imageData);
 };
 
 const fetchImageAsDataUrl = async (imageUrl: string) => {
@@ -490,6 +494,23 @@ const getMuzhiImageSize = (_imageModel: string, aspectRatio: AspectRatio, _image
   return MUZHI_OPENAI_IMAGE_SIZES[normalizedRatio] || "1024x1024";
 };
 
+const buildMuzhiReferencePrompt = (prompt: string, referencedImages: ReferenceImageItem[]) => {
+  if (referencedImages.length === 0) {
+    return prompt;
+  }
+
+  const cleanPrompt = removeReferenceMentions(prompt);
+  const referenceInstruction = referencedImages
+    .map((reference, index) => `第 ${index + 1} 张参考图（${reference.name}）`)
+    .join("、");
+
+  return [
+    `请严格参考已上传的${referenceInstruction}。`,
+    "参考图是本次生成的重要输入，请优先保持参考图的主体特征、外观、结构、姿态、风格和关键细节，不要只把它当作普通文字标签。",
+    cleanPrompt || prompt
+  ].join("\n");
+};
+
 const extractDirectImageUrl = (response: MuzhiImageGenerationResponse) => {
   const firstDataItem = (Array.isArray(response.data) ? response.data[0] : response.data) as Record<string, unknown> | undefined;
   return response.url || response.image_url || String(firstDataItem?.url || firstDataItem?.image_url || "");
@@ -508,10 +529,11 @@ const generateMuzhiImage = async (
   referenceImages?: ReferenceImageItem[],
   referencePrompt?: string
 ) => {
-  const imageUrls = buildAPIMartReferenceImageUrls(referenceImages || [], referencePrompt || prompt);
+  const referencedImages = getReferencedImagesFromPrompt(referenceImages || [], referencePrompt || prompt);
+  const imageUrls = referencedImages.map(reference => reference.imageData);
   const payload: Record<string, unknown> = {
     model: imageModel,
-    prompt,
+    prompt: buildMuzhiReferencePrompt(prompt, referencedImages),
     size: getMuzhiImageSize(imageModel, aspectRatio, imageSize),
     n: 1
   };
