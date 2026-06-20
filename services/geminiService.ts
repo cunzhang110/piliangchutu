@@ -535,11 +535,13 @@ const generateMuzhiImage = async (
     model: imageModel,
     prompt: buildMuzhiReferencePrompt(prompt, referencedImages),
     size: getMuzhiImageSize(imageModel, aspectRatio, imageSize),
-    n: 1
+    n: 1,
+    response_format: "b64_json"
   };
 
   if (imageUrls.length > 0) {
     payload.image_urls = imageUrls;
+    payload.reference_images = imageUrls;
   }
 
   const response = await requestJson<MuzhiImageGenerationResponse>("muzhi", "/v1/images/generations", {
